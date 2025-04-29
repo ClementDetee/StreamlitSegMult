@@ -554,10 +554,3 @@ try:
                                         areas = [prop.area for prop in results["filtered_props"]]
                                         col2.metric("Surface moyenne (px)", f"{int(np.mean(areas))}")
                                         col3.metric("Plage de tailles (px)", f"{int(min(areas))} - {int(max(areas))}")
-                                    
-                                    # Afficher l'écart par rapport au nombre attendu
-                                    diff = abs(len(results["filtered_props"]) - expected_insects)
-                                    if diff == 0:
-                                        st.success(f"✅ Nombre exact d'insectes détectés: {len(results['filtered_props'])}")
-                                    elif diff <= 2:
-                                        st.warning(f"⚠️ {len(results
