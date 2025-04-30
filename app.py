@@ -590,7 +590,7 @@ st.write("""
         3. **Filtrer par circularité**: Activez cette option pour éliminer les fausses détections allongées ou irrégulières
         4. **Ajustement itératif**: Affinez progressivement les paramètres en observant les résultats à chaque étape
         
-        N'hésitez pas à expérimenter avec différentes combinaisons de paramètres pour optimiser la détection selon vos images spécifiques.
+        hésitez pas à expérimenter avec différentes combinaisons de paramètres pour optimiser la détection selon vos images spécifiques.
         """)
         
         st.subheader("Fonctionnalités avancées")
