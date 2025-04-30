@@ -13,7 +13,7 @@ import base64
 
 def make_square(image, fill_color=(255, 255, 255)):
     """
-    Rend l'image carrée en ajoutant des bordures blanches
+    Rend lʼimage carrée en ajoutant des bordures blanches
     """
     height, width = image.shape[:2]
     
@@ -26,7 +26,7 @@ def make_square(image, fill_color=(255, 255, 255)):
     left = (max_side - width) // 2
     right = max_side - width - left
     
-    # Ajouter les bordures pour rendre l'image carrée
+    # Ajouter les bordures pour rendre lʼimage carrée
     square_image = cv2.copyMakeBorder(
         image, 
         top, 
@@ -55,7 +55,7 @@ def process_image(image, params, expected_insects):
     use_circularity = params.get("use_circularity", False)
     min_circularity = params.get("min_circularity", 0.3)
     
-    # Convertir l'image en niveaux de gris
+    # Convertir lʼimage en niveaux de gris
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     
     # Appliquer un flou gaussien
@@ -72,7 +72,7 @@ def process_image(image, params, expected_insects):
         
         # Variables pour stocker les meilleurs paramètres
         best_params = {"adapt_c": 5, "min_area": 50}
-        best_count_diff = float('inf')
+        best_count_diff = float(ʼinfʼ)
         best_filtered_props = []
         
         # Tester toutes les combinaisons de paramètres
@@ -143,7 +143,7 @@ def process_image(image, params, expected_insects):
         kernel = np.ones((morph_kernel, morph_kernel), np.uint8)
         closing = cv2.morphologyEx(dilated_thresh, cv2.MORPH_CLOSE, kernel, iterations=morph_iterations)
         
-        # Ensuite procéder avec l'ouverture comme avant
+        # Ensuite procéder avec lʼouverture comme avant
         opening = cv2.morphologyEx(closing, cv2.MORPH_OPEN, kernel, iterations=1)
 
         # Supprimer les objets qui touchent les bords
@@ -181,7 +181,7 @@ def process_image(image, params, expected_insects):
 
 def extract_insects(image, filtered_props, margin):
     """
-    Extrait les insectes détectés de l'image et les rend carrés
+    Extrait les insectes détectés de lʼimage et les rend carrés
     """
     extracted_insects = []
     
@@ -196,14 +196,14 @@ def extract_insects(image, filtered_props, margin):
         maxr = min(image.shape[0], maxr + margin)
         maxc = min(image.shape[1], maxc + margin)
 
-        # Extraire l'insecte avec sa boîte englobante depuis l'image originale
+        # Extraire lʼinsecte avec sa boîte englobante depuis lʼimage originale
         insect_roi = image[minr:maxr, minc:maxc].copy()
         roi_height, roi_width = insect_roi.shape[:2]
         
-        # Créer un masque initial pour l'insecte
+        # Créer un masque initial pour lʼinsecte
         mask = np.zeros((roi_height, roi_width), dtype=np.uint8)
         
-        # 1. Marquer les pixels de l'insecte dans le masque
+        # 1. Marquer les pixels de lʼinsecte dans le masque
         for coord in prop.coords:
             if minr <= coord[0] < maxr and minc <= coord[1] < maxc:
                 mask[coord[0] - minr, coord[1] - minc] = 255
@@ -237,10 +237,10 @@ def extract_insects(image, filtered_props, margin):
         # Créer un masque pour le floodfill
         flood_mask = np.zeros((roi_height+4, roi_width+4), dtype=np.uint8)
         
-        # Remplir depuis les bords pour marquer tout l'extérieur
+        # Remplir depuis les bords pour marquer tout lʼextérieur
         cv2.floodFill(mask_with_border, flood_mask, (0, 0), 128)
         
-        # Inverser: tout ce qui n'a pas été atteint est à l'intérieur d'un trou
+        # Inverser: tout ce qui nʼa pas été atteint est à lʼintérieur dʼun trou
         holes = np.where((mask_with_border != 128) & (mask_with_border != 255), 255, 0).astype(np.uint8)
         holes = holes[1:-1, 1:-1]  # Enlever la bordure
         
@@ -251,14 +251,14 @@ def extract_insects(image, filtered_props, margin):
         kernel_smooth = np.ones((3, 3), np.uint8)
         smooth_mask = cv2.dilate(complete_mask, kernel_smooth, iterations=1)
         
-        # Convertir en masque 3 canaux pour l'appliquer à l'image couleur
+        # Convertir en masque 3 canaux pour lʼappliquer à lʼimage couleur
         mask_3ch = cv2.cvtColor(smooth_mask, cv2.COLOR_GRAY2BGR)
         
-        # Créer l'image avec fond blanc
+        # Créer lʼimage avec fond blanc
         white_bg = np.ones_like(insect_roi) * 255
         insect_on_white = np.where(mask_3ch == 255, insect_roi, white_bg)
         
-        # Rendre l'image carrée
+        # Rendre lʼimage carrée
         square_insect = make_square(insect_on_white)
         
         extracted_insects.append({
@@ -269,11 +269,11 @@ def extract_insects(image, filtered_props, margin):
     return extracted_insects
 
 def main():
-    st.title("Détection et isolation d'insectes")
+    st.title("Détection et isolation dʼinsectes")
     st.write("Cette application permet de détecter des insectes sur un fond clair et de les isoler individuellement.")
 
-    # Onglets pour l'application
-    tab1, tab2 = st.tabs(["Application", "Guide d'utilisation"])
+    # Onglets pour lʼapplication
+    tab1, tab2 = st.tabs(["Application", "Guide dʼutilisation"])
     
     with tab1:
         # Charger les images
@@ -286,8 +286,8 @@ def main():
             # Paramètres ajustables dans la barre latérale
             st.sidebar.header("Paramètres de détection")
             
-            # Demander le nombre attendu d'insectes
-            expected_insects = st.sidebar.number_input("Nombre d'insectes attendus", min_value=1, value=5, step=1)
+            # Demander le nombre attendu dʼinsectes
+            expected_insects = st.sidebar.number_input("Nombre dʼinsectes attendus", min_value=1, value=5, step=1)
             
             # Ajout de configurations prédéfinies
             presets = {
@@ -354,12 +354,12 @@ def main():
             margin = 17
             auto_adjust = False
             
-            # Utiliser les valeurs des presets ou permettre l'ajustement manuel
+            # Utiliser les valeurs des presets ou permettre lʼajustement manuel
             if preset_choice == "Auto-ajustement":
                 st.sidebar.info(f"Les paramètres seront ajustés automatiquement pour détecter {expected_insects} insectes.")
                 auto_adjust = True
                 
-                # Permettre d'ajuster certains paramètres de base même en mode auto-ajustement
+                # Permettre dʼajuster certains paramètres de base même en mode auto-ajustement
                 blur_kernel = st.sidebar.slider("Taille du noyau de flou gaussien", 1, 21, 7, step=2)
                 adapt_block_size = st.sidebar.slider("Taille du bloc adaptatif", 3, 51, 35, step=2)
                 morph_kernel = st.sidebar.slider("Taille du noyau morphologique", 1, 9, 1, step=2)
@@ -415,11 +415,11 @@ def main():
                 nparr = np.frombuffer(file_bytes, np.uint8)
                 image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-                # Afficher l'image originale
+                # Afficher lʼimage originale
                 st.image(cv2.cvtColor(image, cv2.COLOR_BGR2RGB), caption=f"Image originale - {uploaded_file.name}", use_column_width=True)
 
-                # Traitement de l'image
-                with st.spinner(f"Traitement de l'image {file_index + 1} en cours..."):
+                # Traitement de lʼimage
+                with st.spinner(f"Traitement de lʼimage {file_index + 1} en cours..."):
                     results = process_image(image, params, expected_insects)
                     
                     # Ajouter les résultats à la liste globale
@@ -464,7 +464,7 @@ def main():
                     # Afficher des statistiques utiles
                     st.subheader(f"Statistiques de détection - {uploaded_file.name}")
                     col1, col2, col3 = st.columns(3)
-                    col1.metric("Nombre d'insectes", len(filtered_props))
+                    col1.metric("Nombre dʼinsectes", len(filtered_props))
                     col1.metric("Nombre attendu", expected_insects)
                     
                     if filtered_props:
@@ -472,16 +472,16 @@ def main():
                         col2.metric("Surface moyenne (px)", f"{int(np.mean(areas))}")
                         col3.metric("Plage de tailles (px)", f"{int(min(areas))} - {int(max(areas))}")
                     
-                    # Afficher l'écart par rapport au nombre attendu
+                    # Afficher lʼécart par rapport au nombre attendu
                     diff = abs(len(filtered_props) - expected_insects)
                     if diff == 0:
-                        st.success(f"✅ Nombre exact d'insectes détectés: {len(filtered_props)}")
+                        st.success(f"✅ Nombre exact dʼinsectes détectés: {len(filtered_props)}")
                     elif diff <= 2:
                         st.warning(f"⚠️ {len(filtered_props)} insectes détectés (écart de {diff} par rapport au nombre attendu)")
                     else:
                         st.error(f"❌ {len(filtered_props)} insectes détectés (écart important de {diff} par rapport au nombre attendu)")
                 
-                    # Afficher quelques exemples d'insectes isolés (limités à 5 pour chaque image)
+                    # Afficher quelques exemples dʼinsectes isolés (limités à 5 pour chaque image)
                     if filtered_props:
                         extracted_insects = extract_insects(image, filtered_props, margin)
                         
@@ -502,7 +502,7 @@ def main():
                 zip_path = os.path.join(temp_dir, "insectes_isoles.zip")
             
                 # Créer un fichier zip
-                with zipfile.ZipFile(zip_path, 'w') as zipf:
+                with zipfile.ZipFile(zip_path, ʼwʼ) as zipf:
                     # Pour chaque image traitée
                     for result_index, result in enumerate(all_results):
                         image = result["image"]
@@ -517,7 +517,7 @@ def main():
                             insect_img = insect["image"]
                             insect_index = insect["index"]
                             
-                            # Nom de fichier avec l'image source et l'indice de l'insecte
+                            # Nom de fichier avec lʼimage source et lʼindice de lʼinsecte
                             temp_img_path = os.path.join(temp_dir, f"{filename_base}_insect_{insect_index+1}.jpg")
                             cv2.imwrite(temp_img_path, insect_img)
                             
@@ -528,57 +528,57 @@ def main():
                 with open(zip_path, "rb") as f:
                     bytes_data = f.read()
                     b64 = base64.b64encode(bytes_data).decode()
-                    href = f'<a href="data:application/zip;base64,{b64}" download="insectes_isoles.zip">Télécharger tous les insectes isolés (ZIP)</a>'
+                    href = fʼ<a href="data:application/zip;base64,{b64}" download="insectes_isoles.zip">Télécharger tous les insectes isolés (ZIP)</a>ʼ
                     st.markdown(href, unsafe_allow_html=True)
     
-    # Onglet pour le guide d'utilisation détaillé
+    # Onglet pour le guide dʼutilisation détaillé
     with tab2:
-        st.header("Guide d'optimisation des paramètres")
+        st.header("Guide dʼoptimisation des paramètres")
         
         st.subheader("Configurations prédéfinies")
         st.write("""
-        L'application propose plusieurs configurations prédéfinies pour différents types d'images:
+        Lʼapplication propose plusieurs configurations prédéfinies pour différents types dʼimages:
         - **Par défaut**: Configuration optimisée basée sur les tests (flou gaussien: 7, bloc adaptatif: 35, seuillage: 5, noyau morphologique: 1, itérations: 3, surface min: 1000, marge: 17)
         - **Grands insectes**: Optimisée pour détecter des insectes de grande taille
         - **Petits insectes**: Optimisée pour les insectes de petite taille ou les détails fins
-        - **Haute précision**: Réduit les fausses détections au prix d'une sensibilité légèrement plus faible
-        - **Auto-ajustement**: Ajuste automatiquement les paramètres pour détecter le nombre d'insectes spécifié
+        - **Haute précision**: Réduit les fausses détections au prix dʼune sensibilité légèrement plus faible
+        - **Auto-ajustement**: Ajuste automatiquement les paramètres pour détecter le nombre dʼinsectes spécifié
         
-        Vous pouvez commencer avec l'une de ces configurations puis ajuster les paramètres selon vos besoins.
+        Vous pouvez commencer avec lʼune de ces configurations puis ajuster les paramètres selon vos besoins.
         """)
         
         st.subheader("Traitement de plusieurs images")
         st.write("""
-        L'application permet désormais de traiter plusieurs images simultanément:
+        Lʼapplication permet désormais de traiter plusieurs images simultanément:
         
         1. Téléchargez plusieurs images en les sélectionnant ensemble
         2. Chaque image sera traitée avec les mêmes paramètres
         3. Les insectes extraits seront regroupés par image source dans le fichier ZIP
         
-        Cette fonctionnalité est particulièrement utile pour traiter des lots d'images similaires.
+        Cette fonctionnalité est particulièrement utile pour traiter des lots dʼimages similaires.
         """)
         
         st.subheader("Format des images extraites")
         st.write("""
         Les insectes extraits sont maintenant:
         
-        1. **Rendus carrés** par ajout de bordures blanches autour de l'image originale
-        2. **Fournis uniquement en format avec fond blanc** (plus d'option transparente)
+        1. **Rendus carrés** par ajout de bordures blanches autour de lʼimage originale
+        2. **Fournis uniquement en format avec fond blanc** (plus dʼoption transparente)
         
-        Ce format carré est idéal pour l'organisation et la présentation des résultats ou pour l'utilisation des images dans des applications de machine learning.
+        Ce format carré est idéal pour lʼorganisation et la présentation des résultats ou pour lʼutilisation des images dans des applications de machine learning.
         """)
         
-        st.subheader("Utilisation de l'auto-ajustement")
+        st.subheader("Utilisation de lʼauto-ajustement")
         st.write("""
-        La fonctionnalité d'auto-ajustement permet de spécifier le nombre d'insectes attendus dans l'image:
+        La fonctionnalité dʼauto-ajustement permet de spécifier le nombre dʼinsectes attendus dans lʼimage:
         
-        1. Indiquez le nombre d'insectes que vous savez présents dans l'image
+        1. Indiquez le nombre dʼinsectes que vous savez présents dans lʼimage
         2. Sélectionnez le mode "Auto-ajustement" dans les configurations prédéfinies
-        3. L'application testera différentes combinaisons de paramètres pour trouver celle qui détecte au mieux le nombre souhaité
+        3. Lʼapplication testera différentes combinaisons de paramètres pour trouver celle qui détecte au mieux le nombre souhaité
 st.write("""
-        L'application testera différentes combinaisons de paramètres pour trouver celle qui détecte au mieux le nombre souhaité d'insectes.
+        Lʼapplication testera différentes combinaisons de paramètres pour trouver celle qui détecte au mieux le nombre souhaité dʼinsectes.
         
-        Cette fonctionnalité est particulièrement utile lorsque vous connaissez à l'avance le nombre d'insectes présents.
+        Cette fonctionnalité est particulièrement utile lorsque vous connaissez à lʼavance le nombre dʼinsectes présents.
         """)
         
         st.subheader("Astuce pour les meilleurs résultats")
@@ -595,30 +595,30 @@ st.write("""
         
         st.subheader("Fonctionnalités avancées")
         st.write("""
-        Le filtrage par circularité permet d'éliminer les objets de forme très irrégulière qui ne sont probablement pas des insectes:
+        Le filtrage par circularité permet dʼéliminer les objets de forme très irrégulière qui ne sont probablement pas des insectes:
         
         - Une circularité de 1.0 correspond à un cercle parfait
-        - Les valeurs recommandées sont entre 0.3 et 0.7 selon les types d'insectes
+        - Les valeurs recommandées sont entre 0.3 et 0.7 selon les types dʼinsectes
         - Les valeurs plus basses incluront davantage de formes allongées
         
-        Cette option est particulièrement utile pour distinguer les insectes des débris ou artefacts dans l'image.
+        Cette option est particulièrement utile pour distinguer les insectes des débris ou artefacts dans lʼimage.
         """)
         
         st.subheader("Résolution des problèmes courants")
         st.write("""
-        **Problème**: Trop peu d'insectes détectés
+        **Problème**: Trop peu dʼinsectes détectés
         - Solution: Diminuez la valeur de surface minimale ou augmentez la constante de seuillage adaptatif
         
-        **Problème**: Trop d'insectes détectés (faux positifs)
+        **Problème**: Trop dʼinsectes détectés (faux positifs)
         - Solution: Augmentez la valeur de surface minimale ou activez le filtre de circularité
         
         **Problème**: Les insectes sont fragmentés (détectés comme plusieurs objets)
-        - Solution: Augmentez la taille du noyau morphologique ou le nombre d'itérations
+        - Solution: Augmentez la taille du noyau morphologique ou le nombre dʼitérations
         
         **Problème**: Les insectes proches sont fusionnés
         - Solution: Diminuez la taille du noyau morphologique ou activez le filtre de circularité
         """)
 
-# Exécuter l'application
+# Exécuter lʼapplication
 if __name__ == "__main__":
     main()
