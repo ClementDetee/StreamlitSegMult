@@ -12,45 +12,28 @@ import zipfile
 import base64
 
 def make_square(image, fill_color=(255, 255, 255)):
-    """
-    Rend lʼimage carrée en ajoutant des bordures blanches.
-    """
     height, width = image.shape[:2]
-    
     max_side = max(height, width)
-    
     top = (max_side - height) // 2
     bottom = max_side - height - top
     left = (max_side - width) // 2
     right = max_side - width - left
-    
-    square_image = cv2.copyMakeBorder(
-        image, 
-        top, 
-        bottom, 
-        left, 
-        right, 
-        cv2.BORDER_CONSTANT, 
-        value=fill_color
-    )
-    
+    square_image = cv2.copyMakeBorder(image, top, bottom, left, right, cv2.BORDER_CONSTANT, value=fill_color)
     return square_image
 
-def process_image(image, params, expected_insects):
+def process_image(image, params, expected_insects_for_image_info=0): # expected_insects_for_image_info is mostly for context now
     """
     Traite une image selon les paramètres fournis et retourne les résultats.
-    Returns a dictionary including 'params_used' which reflects actual parameters
-    after potential internal auto-adjustment of adapt_c and min_area.
+    Includes relative size filtering.
     """
     blur_kernel = params["blur_kernel"]
     adapt_block_size = params["adapt_block_size"]
-    # These might be overridden by auto_adjust logic below
     adapt_c = params["adapt_c"]
     min_area = params["min_area"]
     
     morph_kernel_size = params["morph_kernel"]
     morph_iterations = params["morph_iterations"]
-    auto_adjust_c_area = params["auto_adjust"] # For adapt_c and min_area
+    auto_adjust_c_area_internally = params.get("auto_adjust_for_internal_tune", False) # Specific flag for internal C/Area tuning
     use_circularity = params.get("use_circularity", False)
     min_circularity = params.get("min_circularity", 0.3)
     
@@ -61,59 +44,46 @@ def process_image(image, params, expected_insects):
     else:
         blurred = gray
     
-    # This section handles auto-adjustment of adapt_c and min_area
-    if auto_adjust_c_area:
+    current_adapt_c = adapt_c
+    current_min_area = min_area
+
+    if auto_adjust_c_area_internally: # This block is for when process_image is called during global param tuning
         adapt_c_values = [-5, 0, 2, 5, 8, 10, 15]
         min_area_values = [20, 30, 50, 75, 100, 150, 200, 300]
-        
-        best_params_auto = {"adapt_c": adapt_c, "min_area": min_area} # Start with current
+        best_params_auto = {"adapt_c": current_adapt_c, "min_area": current_min_area}
         best_count_diff = float('inf')
-        best_filtered_props_auto = [] # Renamed to avoid conflict
+        best_filtered_props_auto = []
         
         for ac_auto in adapt_c_values:
             for ma_auto in min_area_values:
-                thresh_auto = cv2.adaptiveThreshold(
-                    blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                    cv2.THRESH_BINARY_INV, adapt_block_size, ac_auto
-                )
+                thresh_auto = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, adapt_block_size, ac_auto)
                 kernel_auto = np.ones((morph_kernel_size, morph_kernel_size), np.uint8)
                 opening_auto = cv2.morphologyEx(thresh_auto, cv2.MORPH_OPEN, kernel_auto, iterations=morph_iterations)
                 cleared_auto = clear_border(opening_auto)
                 labels_auto = measure.label(cleared_auto)
                 props_auto = measure.regionprops(labels_auto)
-                
                 current_filtered_props_auto = [prop for prop in props_auto if prop.area >= ma_auto]
-                count_diff = abs(len(current_filtered_props_auto) - expected_insects)
+                count_diff = abs(len(current_filtered_props_auto) - expected_insects_for_image_info) # Use per-image target here
                 
                 if count_diff < best_count_diff:
                     best_count_diff = count_diff
                     best_params_auto["adapt_c"] = ac_auto
                     best_params_auto["min_area"] = ma_auto
                     best_filtered_props_auto = current_filtered_props_auto
-                    if best_count_diff == 0: # Optimization: if exact match found
-                        break
-            if best_count_diff == 0:
-                break
+                    if best_count_diff == 0: break
+            if best_count_diff == 0: break
         
-        adapt_c = best_params_auto["adapt_c"]
-        min_area = best_params_auto["min_area"]
-        
-        # Recalculate with best auto params for consistency
-        thresh = cv2.adaptiveThreshold(
-            blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY_INV, adapt_block_size, adapt_c
-        )
+        current_adapt_c = best_params_auto["adapt_c"]
+        current_min_area = best_params_auto["min_area"]
+        # Use props from this auto-tuning for the next steps
+        thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, adapt_block_size, current_adapt_c)
         kernel = np.ones((morph_kernel_size, morph_kernel_size), np.uint8)
         opening = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=morph_iterations)
         cleared = clear_border(opening)
         labels = measure.label(cleared)
-        filtered_props = best_filtered_props_auto # Use the props found by the best auto params
-        
-    else: # Standard processing with given adapt_c and min_area
-        thresh = cv2.adaptiveThreshold(
-            blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY_INV, adapt_block_size, adapt_c
-        )
+        filtered_props = best_filtered_props_auto
+    else: # Standard processing with fixed C and Area
+        thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, adapt_block_size, current_adapt_c)
         connect_kernel = np.ones((5, 5), np.uint8)
         dilated_thresh = cv2.dilate(thresh, connect_kernel, iterations=2)
         kernel = np.ones((morph_kernel_size, morph_kernel_size), np.uint8)
@@ -122,35 +92,51 @@ def process_image(image, params, expected_insects):
         cleared = clear_border(opening)
         labels = measure.label(cleared)
         props = measure.regionprops(labels)
+        pre_filter_props = [prop for prop in props if prop.area >= current_min_area] # Initial filter by min_area
 
         if use_circularity:
             filtered_props = []
-            for prop in props:
-                if prop.area >= min_area:
-                    perimeter = prop.perimeter
-                    if perimeter > 0:
-                        circularity = 4 * np.pi * prop.area / (perimeter * perimeter)
-                        if circularity >= min_circularity:
-                            filtered_props.append(prop)
+            for prop in pre_filter_props: # Apply circularity on props already filtered by min_area
+                perimeter = prop.perimeter
+                if perimeter > 0:
+                    circularity = 4 * np.pi * prop.area / (perimeter * perimeter)
+                    if circularity >= min_circularity:
+                        filtered_props.append(prop)
         else:
-            filtered_props = [prop for prop in props if prop.area >= min_area]
+            filtered_props = pre_filter_props
 
-    # Store the actual parameters used for this specific processing run
+
+    # --- Relative Size Filter (Dirt Rejection) ---
+    if len(filtered_props) > 1: # Only apply if multiple objects to compare
+        areas = [prop.area for prop in filtered_props]
+        if areas: # Ensure areas list is not empty
+            avg_area = np.mean(areas)
+            # Only apply relative filter if average area is somewhat substantial,
+            # and not just an average of tiny specks.
+            if avg_area > max(2 * current_min_area, 50): # Heuristic: avg area should be > 2x min_area or 50 abs
+                relative_threshold_area = 0.1 * avg_area
+                
+                final_filtered_props_after_relative = []
+                for prop in filtered_props:
+                    # Object must be >= relative threshold AND still >= original min_area (redundant but safe)
+                    if prop.area >= relative_threshold_area and prop.area >= current_min_area :
+                        final_filtered_props_after_relative.append(prop)
+                filtered_props = final_filtered_props_after_relative
+    # --- End of Relative Size Filter ---
+
     final_params_used = params.copy()
-    final_params_used['adapt_c'] = adapt_c # Updated if auto_adjust_c_area was true
-    final_params_used['min_area'] = min_area # Updated if auto_adjust_c_area was true
-    # blur_kernel, morph_kernel_size, etc., are as per the input `params`
+    final_params_used['adapt_c'] = current_adapt_c
+    final_params_used['min_area'] = current_min_area 
+    final_params_used['blur_kernel'] = blur_kernel # Reflects the blur used for this run
     
     return {
-        "blurred": blurred,
-        "thresh": thresh, 
-        "opening": opening,
-        "labels": labels,
-        "filtered_props": filtered_props,
-        "params_used": final_params_used 
+        "blurred": blurred, "thresh": thresh, "opening": opening, "labels": labels,
+        "filtered_props": filtered_props, "params_used": final_params_used 
     }
 
+
 def extract_insects(image, filtered_props, margin):
+    # (This function remains largely the same as before)
     extracted_insects = []
     for i, prop in enumerate(filtered_props):
         minr, minc, maxr, maxc = prop.bbox
@@ -162,8 +148,7 @@ def extract_insects(image, filtered_props, margin):
         insect_roi = image[minr:maxr, minc:maxc].copy()
         roi_height, roi_width = insect_roi.shape[:2]
 
-        if roi_height == 0 or roi_width == 0:
-            continue
+        if roi_height == 0 or roi_width == 0: continue
             
         mask_from_coords = np.zeros((roi_height, roi_width), dtype=np.uint8)
         for coord in prop.coords:
@@ -213,210 +198,210 @@ def extract_insects(image, filtered_props, margin):
 
 def main():
     st.title("Détection et isolation dʼinsectes")
-    st.write("Cette application permet de détecter des insectes sur un fond clair et de les isoler individuellement.")
+    st.write("Application pour la détection globale d'insectes sur plusieurs images.")
 
     tab1, tab2 = st.tabs(["Application", "Guide dʼutilisation"])
     
     with tab1:
-        uploaded_files = st.file_uploader(
-            "Choisissez une ou plusieurs images (glissez-déposez ou parcourez)", 
-            type=["jpg", "jpeg", "png"], 
-            accept_multiple_files=True
-        )
+        uploaded_files = st.file_uploader("Choisissez une ou plusieurs images", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
         if uploaded_files:
-            all_results_data = []
+            all_images_results = [] # Renamed
+            grand_total_detected_insects = 0
             
-            st.sidebar.header("Paramètres de détection")
-            expected_insects = st.sidebar.number_input("Nombre dʼinsectes attendus", min_value=1, value=5, step=1)
+            st.sidebar.header("Paramètres de détection Globaux")
+            expected_insects_grand_total = st.sidebar.number_input("Nombre total dʼinsectes attendus (toutes images)", min_value=1, value=len(uploaded_files) * 3, step=1) # Default guess
             
             presets = {
                 "Par défaut": {"blur_kernel": 7, "adapt_block_size": 35, "adapt_c": 5, "morph_kernel": 3, "morph_iterations": 2, "min_area": 100, "margin": 15},
                 "Grands insectes": {"blur_kernel": 7, "adapt_block_size": 35, "adapt_c": 8, "morph_kernel": 5, "morph_iterations": 2, "min_area": 300, "margin": 15},
-                "Petits insectes": {"blur_kernel": 3, "adapt_block_size": 15, "adapt_c": 2, "morph_kernel": 3, "morph_iterations": 1, "min_area": 30, "margin": 5},
-                "Haute précision": {"blur_kernel": 5, "adapt_block_size": 25, "adapt_c": 12, "morph_kernel": 3, "morph_iterations": 2, "min_area": 150, "margin": 10},
-                "Arthropodes à pattes fines": {"blur_kernel": 3, "adapt_block_size": 21, "adapt_c": 3, "morph_kernel": 3, "morph_iterations": 2, "min_area": 150, "margin": 20}
+                # ... other presets
             }
-            
-            preset_choice = st.sidebar.selectbox("Configurations prédéfinies", ["Personnalisé", "Auto-ajustement C/Aire"] + list(presets.keys()), index=2)
+            preset_choice = st.sidebar.selectbox("Configurations prédéfinies", ["Personnalisé", "Auto-ajustement C/Aire Global"] + list(presets.keys()), index=2)
             
             # Initialize params_config with base defaults, then override by preset/sliders
-            params_config = presets["Par défaut"].copy() 
-            auto_adjust_c_area_mode = False
+            params_config_globally = presets["Par défaut"].copy() 
+            # Flag to indicate if C/Area auto-adjustment should run on the first image
+            should_auto_adjust_c_area_globally = False 
 
-            if preset_choice == "Auto-ajustement C/Aire":
-                st.sidebar.info(f"Ajustement auto. de C et Aire pour {expected_insects} insectes.")
-                auto_adjust_c_area_mode = True
-                # User can still set base blur, block, morph for this mode
-                # adapt_c and min_area from preset are starting points but will be auto-tuned by process_image
+            if preset_choice == "Auto-ajustement C/Aire Global":
+                should_auto_adjust_c_area_globally = True
             elif preset_choice != "Personnalisé":
-                params_config = presets[preset_choice].copy()
-            # If "Personnalisé", params_config (initially "Par Défaut") will be modified by sliders below
+                params_config_globally = presets[preset_choice].copy()
 
             # Sliders always visible, their defaults change with preset, user can override
-            params_config["blur_kernel"] = st.sidebar.slider("Noyau de flou gaussien", 1, 21, params_config["blur_kernel"], step=2, key=f"blur_slider_{preset_choice}")
-            params_config["adapt_block_size"] = st.sidebar.slider("Taille du bloc adaptatif", 3, 51, params_config["adapt_block_size"], step=2, key=f"block_slider_{preset_choice}")
-            if not auto_adjust_c_area_mode: # Only show these if not in C/Area auto-adjust mode
-                params_config["adapt_c"] = st.sidebar.slider("Constante de seuillage adaptatif", -10, 30, params_config["adapt_c"], key=f"c_slider_{preset_choice}")
-                params_config["min_area"] = st.sidebar.slider("Surface minimale (pixels)", 10, 1000, params_config["min_area"], key=f"area_slider_{preset_choice}")
+            # These will be the initial values for global parameter determination if auto-adjust is on
+            params_config_globally["blur_kernel"] = st.sidebar.slider("Noyau de flou gaussien", 1, 21, params_config_globally["blur_kernel"], step=2, key=f"blur_glob_{preset_choice}")
+            params_config_globally["adapt_block_size"] = st.sidebar.slider("Taille du bloc adaptatif", 3, 51, params_config_globally["adapt_block_size"], step=2, key=f"block_glob_{preset_choice}")
             
-            params_config["morph_kernel"] = st.sidebar.slider("Taille du noyau morphologique", 1, 9, params_config["morph_kernel"], step=2, key=f"morph_k_slider_{preset_choice}")
-            params_config["morph_iterations"] = st.sidebar.slider("Itérations morphologiques", 1, 5, params_config["morph_iterations"], key=f"morph_i_slider_{preset_choice}")
-            params_config["margin"] = st.sidebar.slider("Marge autour des insectes", 0, 50, params_config["margin"], key=f"margin_slider_{preset_choice}")
-
-            params_config["use_circularity"] = st.sidebar.checkbox("Filtrer par circularité", value=False)
-            if params_config["use_circularity"]:
-                params_config["min_circularity"] = st.sidebar.slider("Circularité minimale", 0.0, 1.0, 0.3, step=0.05)
+            # adapt_c and min_area sliders are shown, but their values might be overridden if global C/Area tuning is on
+            params_config_globally["adapt_c"] = st.sidebar.slider("Constante de seuillage C", -10, 30, params_config_globally["adapt_c"], key=f"c_glob_{preset_choice}")
+            params_config_globally["min_area"] = st.sidebar.slider("Surface minimale Aire", 10, 1000, params_config_globally["min_area"], key=f"area_glob_{preset_choice}")
             
-            params_config["auto_adjust"] = auto_adjust_c_area_mode # Flag for process_image
+            params_config_globally["morph_kernel"] = st.sidebar.slider("Noyau morphologique", 1, 9, params_config_globally["morph_kernel"], step=2, key=f"morph_k_glob_{preset_choice}")
+            params_config_globally["morph_iterations"] = st.sidebar.slider("Itérations morphologiques", 1, 5, params_config_globally["morph_iterations"], key=f"morph_i_glob_{preset_choice}")
+            params_config_globally["margin"] = st.sidebar.slider("Marge autour des insectes", 0, 50, params_config_globally["margin"], key=f"margin_glob_{preset_choice}")
 
-            attempt_blur_auto_adjust = st.sidebar.checkbox("Activer l'auto-ajustement du Flou si compte incorrect", value=True)
+            params_config_globally["use_circularity"] = st.sidebar.checkbox("Filtrer par circularité", value=False)
+            if params_config_globally["use_circularity"]:
+                params_config_globally["min_circularity"] = st.sidebar.slider("Circularité minimale", 0.0, 1.0, 0.3, step=0.05)
+            
+            should_auto_adjust_blur_globally = st.sidebar.checkbox("Auto-ajustement du Flou Global (sur 1ère image)", value=False)
 
+            # --- Determine Global Parameters based on First Image ---
+            st.markdown("---")
+            st.subheader("Détermination des Paramètres Globaux (basée sur la 1ère image)")
+            
+            # Make a working copy for global tuning
+            tuned_params_for_all_images = params_config_globally.copy() 
+
+            first_image_obj = uploaded_files[0]
+            first_image_bytes = first_image_obj.getvalue()
+            first_nparr = np.frombuffer(first_image_bytes, np.uint8)
+            first_cv_image = cv2.imdecode(first_nparr, cv2.IMREAD_COLOR)
+            
+            # Target for tuning on the first image
+            expected_for_first_image_tuning = max(1, round(expected_insects_grand_total / len(uploaded_files)))
+            st.write(f"Image de référence pour l'ajustement global: {first_image_obj.name} (cible pour cette image: ~{expected_for_first_image_tuning} insectes)")
+
+            # 1. Global C/Area Tuning (if selected)
+            if should_auto_adjust_c_area_globally:
+                with st.spinner("Ajustement global C/Aire en cours..."):
+                    params_for_c_area_tune = tuned_params_for_all_images.copy()
+                    params_for_c_area_tune["auto_adjust_for_internal_tune"] = True # Enable internal C/Area tuning
+                    
+                    c_area_tune_data = process_image(first_cv_image, params_for_c_area_tune, expected_for_first_image_tuning)
+                    tuned_params_for_all_images["adapt_c"] = c_area_tune_data["params_used"]["adapt_c"]
+                    tuned_params_for_all_images["min_area"] = c_area_tune_data["params_used"]["min_area"]
+                st.success(f"Global C/Aire déterminés: C={tuned_params_for_all_images['adapt_c']}, Aire Min={tuned_params_for_all_images['min_area']}")
+
+            # 2. Global Blur Tuning (if selected) - uses potentially updated C/Area from above
+            if should_auto_adjust_blur_globally:
+                with st.spinner("Ajustement global du Flou en cours..."):
+                    blur_kernel_options = [k for k in range(1, 22, 2)]
+                    best_blur_found_globally = tuned_params_for_all_images["blur_kernel"]
+                    min_diff_for_global_blur = float('inf')
+                    
+                    # Store C/Area that might get co-tuned with blur
+                    c_after_blur_tune = tuned_params_for_all_images["adapt_c"]
+                    area_after_blur_tune = tuned_params_for_all_images["min_area"]
+
+                    for trial_blur in blur_kernel_options:
+                        params_for_blur_trial = tuned_params_for_all_images.copy()
+                        params_for_blur_trial["blur_kernel"] = trial_blur
+                        # If C/Area was globally tuned, it's now fixed. If not, and user selected "Auto C/Aire Global",
+                        # then internal C/Area tuning should happen *with* this trial blur.
+                        params_for_blur_trial["auto_adjust_for_internal_tune"] = should_auto_adjust_c_area_globally
+                        
+                        trial_data = process_image(first_cv_image, params_for_blur_trial, expected_for_first_image_tuning)
+                        trial_num_detected = len(trial_data["filtered_props"])
+                        trial_diff = abs(trial_num_detected - expected_for_first_image_tuning)
+
+                        if trial_diff < min_diff_for_global_blur:
+                            min_diff_for_global_blur = trial_diff
+                            best_blur_found_globally = trial_blur
+                            if should_auto_adjust_c_area_globally: # If C/Area were co-tuned
+                                c_after_blur_tune = trial_data["params_used"]["adapt_c"]
+                                area_after_blur_tune = trial_data["params_used"]["min_area"]
+                        elif trial_diff == min_diff_for_global_blur and trial_blur < best_blur_found_globally:
+                            best_blur_found_globally = trial_blur
+                            if should_auto_adjust_c_area_globally:
+                                c_after_blur_tune = trial_data["params_used"]["adapt_c"]
+                                area_after_blur_tune = trial_data["params_used"]["min_area"]
+                        if min_diff_for_global_blur == 0: break
+                    
+                    tuned_params_for_all_images["blur_kernel"] = best_blur_found_globally
+                    if should_auto_adjust_c_area_globally:
+                        tuned_params_for_all_images["adapt_c"] = c_after_blur_tune
+                        tuned_params_for_all_images["min_area"] = area_after_blur_tune
+                        st.success(f"Global Flou déterminé: {tuned_params_for_all_images['blur_kernel']}. "
+                                   f"Global C/Aire (après Flou): C={tuned_params_for_all_images['adapt_c']}, Aire Min={tuned_params_for_all_images['min_area']}")
+                    else:
+                        st.success(f"Global Flou déterminé: {tuned_params_for_all_images['blur_kernel']}.")
+            
+            # Ensure internal tuning flag is OFF for actual batch processing
+            tuned_params_for_all_images["auto_adjust_for_internal_tune"] = False
+            st.markdown("---")
+            st.subheader("Traitement des Images avec Paramètres Globaux")
+            st.json(tuned_params_for_all_images) # Show the final global params
+
+            # --- Process all images with the determined global parameters ---
             for file_index, uploaded_file in enumerate(uploaded_files):
-                st.markdown(f"### Image {file_index + 1}: {uploaded_file.name}")
+                st.markdown(f"#### Image {file_index + 1}: {uploaded_file.name}")
                 file_bytes = uploaded_file.getvalue()
                 nparr = np.frombuffer(file_bytes, np.uint8)
                 cv_image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-                st.image(cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB), caption=f"Image originale - {uploaded_file.name}", use_column_width=True)
-
-                with st.spinner(f"Traitement initial de lʼimage {file_index + 1}..."):
-                    # Initial processing run with current params_config
-                    processed_data = process_image(cv_image, params_config, expected_insects)
+                with st.spinner(f"Traitement image {file_index + 1} avec params globaux..."):
+                    # Process with globally determined parameters, internal C/Area tuning is OFF now
+                    processed_data = process_image(cv_image, tuned_params_for_all_images, 0) # Expected count not used for tuning here
                 
-                num_detected_initial = len(processed_data["filtered_props"])
-                
-                # --- Auto-adjust Blur Kernel if count is incorrect ---
-                if attempt_blur_auto_adjust and num_detected_initial != expected_insects:
-                    st.info(f"Image {file_index + 1}: Nombre initial d'insectes ({num_detected_initial}) incorrect. "
-                            f"Tentative d'ajustement automatique du noyau de flou...")
-                    
-                    blur_kernel_options = [k for k in range(1, 22, 2)] # e.g., 1, 3, ..., 21
-                    
-                    best_blur_kernel_found = processed_data["params_used"]["blur_kernel"]
-                    min_diff_found = abs(num_detected_initial - expected_insects)
-                    best_processed_data_after_blur_trials = processed_data
-
-                    # Create a mutable copy for trial runs
-                    temp_params_for_blur_trials = params_config.copy() 
-                    # Ensure auto_adjust for C/Area is carried over if it was active
-                    temp_params_for_blur_trials["auto_adjust"] = auto_adjust_c_area_mode 
-
-
-                    for trial_blur in blur_kernel_options:
-                        if trial_blur == best_blur_kernel_found and min_diff_found == abs(num_detected_initial - expected_insects): # Skip if it's the initial blur unless it's the only option
-                             pass # Allow re-processing if it wasn't the initial best
-
-                        temp_params_for_blur_trials["blur_kernel"] = trial_blur
-                        with st.spinner(f"Image {file_index + 1}: Test avec noyau de flou {trial_blur}..."):
-                            trial_data = process_image(cv_image, temp_params_for_blur_trials, expected_insects)
-                        
-                        trial_num_detected = len(trial_data["filtered_props"])
-                        trial_diff = abs(trial_num_detected - expected_insects)
-
-                        if trial_diff < min_diff_found:
-                            min_diff_found = trial_diff
-                            best_blur_kernel_found = trial_blur
-                            best_processed_data_after_blur_trials = trial_data
-                        elif trial_diff == min_diff_found: # Prefer smaller blur or original if diff is same
-                            if trial_blur < best_blur_kernel_found : # Prioritize smaller blur for same diff
-                                best_blur_kernel_found = trial_blur
-                                best_processed_data_after_blur_trials = trial_data
-                        
-                        if min_diff_found == 0: # Exact match found
-                            break
-                    
-                    # Update processed_data with the best result from blur trials
-                    if best_processed_data_after_blur_trials["params_used"]["blur_kernel"] != processed_data["params_used"]["blur_kernel"] or \
-                       len(best_processed_data_after_blur_trials["filtered_props"]) != num_detected_initial :
-                        if min_diff_found < abs(num_detected_initial - expected_insects) or \
-                           (min_diff_found == abs(num_detected_initial - expected_insects) and \
-                            best_processed_data_after_blur_trials["params_used"]["blur_kernel"] != processed_data["params_used"]["blur_kernel"]):
-                            st.success(f"Image {file_index + 1}: Noyau de flou ajusté à "
-                                       f"{best_processed_data_after_blur_trials['params_used']['blur_kernel']}. "
-                                       f"Nombre détecté : {len(best_processed_data_after_blur_trials['filtered_props'])} (Attendu: {expected_insects})")
-                            processed_data = best_processed_data_after_blur_trials
-                        else:
-                             st.warning(f"Image {file_index + 1}: Ajustement du noyau de flou n'a pas amélioré le comptage. "
-                                       f"Utilisation du résultat initial avec noyau {processed_data['params_used']['blur_kernel']}: "
-                                       f"{num_detected_initial} insectes.")
-                    elif min_diff_found == 0 and len(best_processed_data_after_blur_trials["filtered_props"]) == expected_insects:
-                         st.success(f"Image {file_index + 1}: Comptage correct ({expected_insects}) "
-                                   f"obtenu avec noyau de flou {best_processed_data_after_blur_trials['params_used']['blur_kernel']}.")
-                         processed_data = best_processed_data_after_blur_trials
-
-                # --- End of Auto-adjust Blur Kernel ---
-
-                # Final results for this image (after any adjustments)
-                final_params_used = processed_data["params_used"]
                 current_filtered_props = processed_data["filtered_props"]
-                num_detected_final = len(current_filtered_props)
+                num_detected_this_image = len(current_filtered_props)
+                grand_total_detected_insects += num_detected_this_image
 
-                all_results_data.append({
-                    "filename": uploaded_file.name,
-                    "image": cv_image,
-                    "results": processed_data # Store the finalized processed data
+                all_images_results.append({
+                    "filename": uploaded_file.name, "image": cv_image, "results": processed_data
                 })
                 
-                # Display info based on final_params_used
-                if auto_adjust_c_area_mode:
-                    st.success(f"Image {file_index + 1}: Params C/Aire auto-ajustés (Flou: {final_params_used['blur_kernel']}): "
-                               f"C={final_params_used['adapt_c']}, Aire Min={final_params_used['min_area']}")
-                elif final_params_used['blur_kernel'] != params_config['blur_kernel'] and attempt_blur_auto_adjust: # if blur was adjusted and wasn't from C/Area mode
-                     pass # Message already shown by blur adjustment logic
+                # Simplified Display
+                disp_col1, disp_col2 = st.columns(2)
+                with disp_col1:
+                    st.image(cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB), caption=f"Originale", width=300) # Smaller original
                 
-                # Display image processing steps
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.image(processed_data["blurred"], caption=f"Floutée (Noyau: {final_params_used['blur_kernel']})", use_column_width=True)
-                    st.image(processed_data["thresh"], caption=f"Seuillage (C: {final_params_used['adapt_c']})", use_column_width=True)
-                with col2:
-                    st.image(processed_data["opening"], caption="Après opérations morphologiques", use_column_width=True)
+                with disp_col2:
                     label_display = np.zeros((processed_data["labels"].shape[0], processed_data["labels"].shape[1], 3), dtype=np.uint8)
                     for prop_item in current_filtered_props:
                         color = np.random.randint(0, 255, size=3)
                         for coord in prop_item.coords:
                             label_display[coord[0], coord[1]] = color
-                    st.image(label_display, caption=f"Insectes détectés: {num_detected_final} (Aire Min: {final_params_used['min_area']})", use_column_width=True)
+                    st.image(label_display, caption=f"Insectes détectés: {num_detected_this_image} "
+                                                   f"(Aire Min Globale: {tuned_params_for_all_images['min_area']})", 
+                             use_column_width=True)
 
-                st.subheader(f"Statistiques de détection finales - {uploaded_file.name}")
-                stat_col1, stat_col2, stat_col3 = st.columns(3)
-                stat_col1.metric("Nombre dʼinsectes", num_detected_final)
-                stat_col1.metric("Nombre attendu", expected_insects)
-                
+                # Per-image stats
+                stat_col1, stat_col2 = st.columns(2)
+                stat_col1.metric(f"Insectes détectés (Image {file_index+1})", num_detected_this_image)
                 if current_filtered_props:
-                    areas = [prop.area for prop in current_filtered_props]
-                    stat_col2.metric("Surface moyenne (px)", f"{int(np.mean(areas)) if areas else 0}")
-                    stat_col3.metric("Plage de tailles (px)", f"{int(min(areas)) if areas else 0} - {int(max(areas)) if areas else 0}")
-                
-                diff_final = abs(num_detected_final - expected_insects)
-                if diff_final == 0:
-                    st.success(f"✅ Nombre exact dʼinsectes détectés: {num_detected_final}")
-                elif diff_final <= 2:
-                    st.warning(f"⚠️ {num_detected_final} insectes détectés (écart de {diff_final})")
+                    areas_this_image = [prop.area for prop in current_filtered_props]
+                    stat_col2.metric(f"Surface moyenne (Image {file_index+1}, px)", f"{int(np.mean(areas_this_image)) if areas_this_image else 0}")
                 else:
-                    st.error(f"❌ {num_detected_final} insectes détectés (écart important de {diff_final})")
-            
-                if current_filtered_props:
-                    extracted_insects_list = extract_insects(cv_image, current_filtered_props, final_params_used["margin"])
-                    st.write(f"Aperçu des premiers insectes isolés de {uploaded_file.name}:")
-                    preview_cols = st.columns(min(5, len(extracted_insects_list)))
-                    for i_prev, col_prev in enumerate(preview_cols):
-                        if i_prev < len(extracted_insects_list):
-                            insect_data = extracted_insects_list[i_prev]
-                            col_prev.image(cv2.cvtColor(insect_data["image"], cv2.COLOR_BGR2RGB), caption=f"Insecte {insect_data['index']+1}", use_column_width=True)
+                    stat_col2.metric(f"Surface moyenne (Image {file_index+1}, px)", "N/A")
+                
+                # Preview of extracted insects (optional, can be verbose)
+                if current_filtered_props and num_detected_this_image > 0 :
+                    extracted_preview = extract_insects(cv_image, current_filtered_props[:min(3, num_detected_this_image)], tuned_params_for_all_images["margin"])
+                    if extracted_preview:
+                        st.write("Aperçu des 1ers insectes extraits:")
+                        preview_cols_ext = st.columns(len(extracted_preview))
+                        for i_ext, insect_ext_data in enumerate(extracted_preview):
+                            preview_cols_ext[i_ext].image(cv2.cvtColor(insect_ext_data["image"], cv2.COLOR_BGR2RGB), width=100)
                 st.markdown("---")
+
+            # --- Grand Total Results ---
+            st.header("Résultats Globaux Finaux")
+            st.metric("Nombre TOTAL d'insectes attendus (toutes images)", expected_insects_grand_total)
+            st.metric("Nombre TOTAL d'insectes détectés (toutes images)", grand_total_detected_insects)
             
-            if st.button("Extraire et télécharger tous les insectes isolés (carrés, fond blanc)"):
+            diff_grand_total = abs(grand_total_detected_insects - expected_insects_grand_total)
+            if diff_grand_total == 0:
+                st.success("✅ Succès! Nombre total d'insectes détectés correspond au nombre attendu.")
+            elif diff_grand_total <= 0.1 * expected_insects_grand_total : # Allow 10% tolerance
+                st.warning(f"⚠️ Attention: {grand_total_detected_insects} insectes détectés au total (attendu: {expected_insects_grand_total}, écart de {diff_grand_total}).")
+            else:
+                st.error(f"❌ Erreur: {grand_total_detected_insects} insectes détectés au total (attendu: {expected_insects_grand_total}, écart important de {diff_grand_total}).")
+
+            if st.button("Extraire et télécharger TOUS les insectes isolés (carrés, fond blanc)"):
+                # (Download logic remains the same, ensure it uses `tuned_params_for_all_images["margin"]`)
                 temp_dir = tempfile.mkdtemp()
-                zip_path = os.path.join(temp_dir, "insectes_isoles.zip")
+                zip_path = os.path.join(temp_dir, "insectes_isoles_batch.zip")
                 with zipfile.ZipFile(zip_path, 'w') as zipf:
-                    for result_item in all_results_data:
+                    for result_item in all_images_results:
                         image_orig = result_item["image"]
                         filename_base = os.path.splitext(result_item["filename"])[0]
-                        # Use the finalized props and margin for extraction
                         props_for_extraction = result_item["results"]["filtered_props"]
-                        margin_for_extraction = result_item["results"]["params_used"]["margin"]
+                        # Use the globally determined margin
+                        margin_for_extraction = tuned_params_for_all_images["margin"] 
                         
                         extracted_insects_for_zip = extract_insects(image_orig, props_for_extraction, margin_for_extraction)
                         for insect_detail in extracted_insects_for_zip:
@@ -429,66 +414,50 @@ def main():
                 with open(zip_path, "rb") as f:
                     bytes_data = f.read()
                     b64 = base64.b64encode(bytes_data).decode()
-                    href = f'<a href="data:application/zip;base64,{b64}" download="insectes_isoles.zip">Télécharger tous les insectes isolés (ZIP)</a>'
+                    href = f'<a href="data:application/zip;base64,{b64}" download="insectes_isoles_batch.zip">Télécharger tous les insectes isolés (ZIP)</a>'
                     st.markdown(href, unsafe_allow_html=True)
     
-    with tab2:
+    with tab2: # Update Guide
         st.header("Guide dʼoptimisation des paramètres")
-        st.subheader("Configurations prédéfinies")
+        st.subheader("Approche Globale de Traitement")
         st.write("""
-        - **Par défaut**: Configuration équilibrée.
-        - **Grands insectes / Petits insectes / Haute précision / Arthropodes à pattes fines**: Optimisations spécifiques.
-        - **Auto-ajustement C/Aire**: Ajuste `Constante de seuillage adaptatif` et `Surface minimale` pour atteindre le nombre d'insectes attendu. Les autres paramètres (flou, bloc, morphologie) sont réglés manuellement via les curseurs et servent de base à cet ajustement.
-        """)
-        
-        st.subheader("Auto-ajustement du Noyau de Flou")
-        st.write("""
-        Si la case "Activer l'auto-ajustement du Flou si compte incorrect" est cochée dans la barre latérale :
-        1. Après un premier essai de détection sur une image, si le nombre d'insectes trouvés ne correspond pas au nombre attendu, l'application va automatiquement tester différentes valeurs pour le "Noyau de flou gaussien".
-        2. Pour chaque valeur de flou testée, si le mode "Auto-ajustement C/Aire" est actif, les paramètres `C` et `Aire` seront également ré-optimisés.
-        3. L'application choisira la valeur de flou (et les `C`/`Aire` associés si en mode auto) qui donne le nombre d'insectes le plus proche du nombre attendu.
-        4. Ce processus est effectué pour chaque image individuellement, permettant d'adapter le flou aux spécificités de chaque photo.
-        Un message indiquera si le flou a été ajusté pour une image et quelle valeur a été retenue.
+        Cette version de l'application adopte une approche de **paramètres globaux**. 
+        - Les paramètres de détection (Flou, Constante C, Aire Minimale, etc.) sont déterminés **une seule fois** au début du traitement.
+        - Si les options "Auto-ajustement C/Aire Global" ou "Auto-ajustement du Flou Global" sont activées, ces paramètres sont optimisés en se basant sur la **première image** de votre lot. La cible pour cette optimisation est le `Nombre total dʼinsectes attendus / nombre d'images`.
+        - Une fois déterminés, ces paramètres sont appliqués **identiquement à toutes les images** du lot.
+        - Le `Nombre total dʼinsectes attendus` que vous spécifiez est pour l'ensemble des images.
         """)
 
-        st.subheader("Traitement de plusieurs images")
+        st.subheader("Filtrage Relatif des Petits Objets (Anti-Saleté)")
         st.write("""
-        L'application permet de traiter plusieurs images en une seule fois. Chaque image est traitée séquentiellement.
-        Les paramètres de détection globaux sont appliqués à chaque image, mais l'auto-ajustement du flou (si activé) peut modifier le noyau de flou spécifiquement pour chaque image afin d'optimiser le comptage.
-        Les insectes extraits sont regroupés par image source dans le fichier ZIP.
+        Pour réduire la détection de petites saletés :
+        1. Après une détection initiale sur une image, si plusieurs objets sont trouvés, leur surface moyenne est calculée.
+        2. Tout objet dont la surface est inférieure à 10% de cette moyenne est automatiquement écarté.
+        3. Ce filtre est appliqué **par image**, car la "taille moyenne" est relative aux insectes de cette image spécifique. Il s'ajoute au filtre global `Surface minimale Aire`.
         """)
-        
-        st.subheader("Format des images extraites")
+
+        st.subheader("Affichage Simplifié")
         st.write("""
-        Les images d'insectes extraites sont carrées (ratio 1:1 avec ajout de bordures blanches) et sur fond blanc.
+        Pour chaque image traitée, l'affichage principal montre :
+        - L'image originale (redimensionnée pour être plus petite).
+        - L'image finale avec les "Insectes détectés" et leur nombre pour cette image.
+        Les étapes intermédiaires de traitement (flou, seuillage, etc.) ne sont plus affichées par défaut pour alléger l'interface.
         """)
-        
-        st.subheader("Astuces pour de meilleurs résultats")
+
+        st.subheader("Configurations Prédéfinies et Auto-Ajustement Global")
         st.write("""
-        - **Qualité des images**: Bon éclairage, contraste suffisant.
-        - **Fond uniforme**: Les fonds clairs et uniformes sont préférables.
-        - **Filtrer par circularité**: Utile pour éliminer les débris.
-        - **Ajustement itératif**: Observez les résultats intermédiaires et les messages d'auto-ajustement.
+        - **Auto-ajustement C/Aire Global**: Si activé, `Constante C` et `Surface minimale Aire` sont optimisées sur la 1ère image.
+        - **Auto-ajustement du Flou Global**: Si activé, `Noyau de flou` est optimisé sur la 1ère image (peut aussi ré-optimiser C/Aire si l'option C/Aire est aussi active).
+        - Les autres paramètres sont pris des curseurs.
         """)
-        
-        st.subheader("Paramètres avancés")
+
+        st.subheader("Astuces pour de Meilleurs Résultats avec l'Approche Globale")
         st.write("""
-        - **Noyau de flou gaussien**: Lisse l'image. Peut être auto-ajusté.
-        - **Taille du bloc adaptatif**: Voisinage pour le seuil adaptatif.
-        - **Constante de seuillage adaptatif (C)**: Ajuste le seuil. Peut être auto-ajusté avec "Auto-ajustement C/Aire".
-        - **Surface minimale (Aire)**: Filtre les petits objets. Peut être auto-ajusté avec "Auto-ajustement C/Aire".
-        - **Noyau morphologique / Itérations**: Nettoient l'image binaire.
-        - **Marge**: Espace ajouté autour de l'insecte extrait.
-        - **Circularité**: Filtre par forme.
+        - **Qualité de la 1ère image**: Elle est cruciale si vous utilisez les auto-ajustements globaux. Assurez-vous qu'elle soit représentative de votre lot.
+        - **Homogénéité du lot**: Si vos images sont très différentes (ex: types d'insectes, éclairage, zoom très variés), un jeu unique de paramètres globaux pourrait ne pas être optimal pour toutes. Dans ce cas, traitez des sous-lots plus homogènes séparément.
+        - **Nombre total attendu**: Fournissez une estimation raisonnable pour le `Nombre total dʼinsectes attendus` sur l'ensemble du lot.
         """)
-        
-        st.subheader("Résolution des problèmes courants")
-        st.write("""
-        - **Comptage incorrect persistant**: Si l'auto-ajustement du flou et/ou C/Aire ne suffit pas, essayez d'ajuster manuellement la `Taille du bloc adaptatif` ou les paramètres morphologiques. La qualité de l'image initiale est cruciale.
-        - **Trop peu dʼinsectes**: Si les auto-ajustements sont désactivés, essayez de diminuer `Surface minimale`, d'augmenter `Constante C`, ou de réduire le `Noyau de flou`.
-        - **Trop dʼinsectes (faux positifs)**: Si les auto-ajustements sont désactivés, augmentez `Surface minimale`, diminuez `Constante C`, ou activez `Circularité`.
-        - **Insectes fragmentés/fusionnés**: Ajustez les paramètres morphologiques (`Noyau morph.`, `Itérations morph.`).
-        """)
+        # ... (other relevant sections of the guide can be kept or adapted)
 
 if __name__ == "__main__":
     main()
