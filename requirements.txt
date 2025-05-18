@@ -5,3 +5,4 @@ matplotlib>=3.8.0
 scikit-image>=0.21.0
 Pillow>=10.0.0
 tensorflow-cpu==2.4.2
+h5py
