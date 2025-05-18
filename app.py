@@ -507,7 +507,7 @@ if __name__ == "__main__":
         st.session_state.segmentation_done = False
     if 'all_images_results' not in st.session_state:
         st.session_state.all_images_results = []
-    if 'grand_total_detected_insects' not st.session_state:
+    if 'grand_total_detected_insects' not in st.session_state:
         st.session_state.grand_total_detected_insects = 0
     if 'expected_insects_grand_total' not in st.session_state:
         st.session_state.expected_insects_grand_total = 0
