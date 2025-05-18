@@ -4,6 +4,6 @@ numpy~=1.19.2
 matplotlib>=3.8.0
 scikit-image>=0.21.0
 Pillow>=10.0.0
-tensorflow==2.4.1
+tensorflow==2.4.0
 Keras==2.4.3
 h5py
