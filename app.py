@@ -1,25 +1,22 @@
 import streamlit as st
 import cv2
 import numpy as np
-# import matplotlib.pyplot as plt # Commentez si non utilisé directement pour affichage
 from skimage import measure
 from skimage.segmentation import clear_border
 import os
 import io
-from PIL import Image, ImageOps # ImageOps est utile pour le pré-traitement TM
+from PIL import Image, ImageOps
 import tempfile
 import zipfile
 import base64
-import tensorflow as tf # On utilise le tf.keras intégré
-from tensorflow import keras
+import tensorflow as tf
 
 # --- Configuration du Modèle d'Identification (SavedModel) ---
-# Le chemin pointe vers le dossier qui contient saved_model.pb, variables/, etc.
-SAVED_MODEL_DIR_PATH = "model.savedmodel" # Si votre dossier s'appelle bien "model.savedmodel" à la racine
-LABELS_PATH = "labels.txt"    # Assurez-vous que ce fichier est à la racine
-MODEL_INPUT_SIZE = (224, 224) # Taille d'entrée attendue par votre modèle Teachable Machine
+SAVED_MODEL_DIR_PATH = "model.savedmodel" # Assurez-vous que ce dossier est à la racine
+LABELS_PATH = "labels.txt"
+MODEL_INPUT_SIZE = (224, 224)
 
-# --- Fonctions existantes (make_square, process_image, extract_insects) ---
+# --- Fonctions de traitement d'image (inchangées) ---
 def make_square(image, fill_color=(255, 255, 255)):
     height, width = image.shape[:2]
     max_side = max(height, width)
@@ -166,89 +163,135 @@ def extract_insects(image, filtered_props, margin):
         extracted_insects.append({"image": square_insect, "index": i, "original_prop": prop})
     return extracted_insects
 
-# --- Nouvelles fonctions pour le modèle SavedModel ---
-@st.cache_resource # Cache la ressource pour ne la charger qu'une fois
+# --- Fonctions pour le modèle SavedModel avec Keras 3 (TFSMLayer) ---
+@st.cache_resource
 def load_saved_model_and_labels(model_dir_path, labels_path):
-    """Charge un TensorFlow SavedModel et les noms des labels."""
+    """Charge un TensorFlow SavedModel en utilisant TFSMLayer pour Keras 3 et les labels."""
+    model_layer = None
+    class_names_loaded = None
     try:
-        st.write(f"Tentative de chargement du modèle depuis : {os.path.abspath(model_dir_path)}")
-        if not os.path.exists(model_dir_path):
-            st.error(f"Le dossier du modèle '{model_dir_path}' n'existe PAS.")
+        abs_model_path = os.path.abspath(model_dir_path)
+        st.write(f"Tentative de chargement du modèle depuis : {abs_model_path}")
+        if not os.path.exists(abs_model_path):
+            st.error(f"Le dossier du modèle '{abs_model_path}' n'existe PAS.")
             return None, None
-        if not os.path.isdir(model_dir_path):
-            st.error(f"'{model_dir_path}' n'est PAS un dossier.")
+        if not os.path.isdir(abs_model_path):
+            st.error(f"'{abs_model_path}' n'est PAS un dossier.")
             return None, None
-        if not os.path.exists(os.path.join(model_dir_path, "saved_model.pb")):
-            st.error(f"Le fichier 'saved_model.pb' est manquant dans '{model_dir_path}'.")
-            st.error(f"Contenu du dossier '{model_dir_path}': {os.listdir(model_dir_path)}")
+        if not os.path.exists(os.path.join(abs_model_path, "saved_model.pb")):
+            st.error(f"Le fichier 'saved_model.pb' est manquant dans '{abs_model_path}'.")
+            st.error(f"Contenu du dossier '{abs_model_path}': {os.listdir(abs_model_path) if os.path.exists(abs_model_path) else 'Dossier non trouvé'}")
             return None, None
 
-        model = tf.keras.models.load_model(model_dir_path)
-        
-        st.write(f"Tentative de chargement des labels depuis : {os.path.abspath(labels_path)}")
-        if not os.path.exists(labels_path):
-            st.error(f"Le fichier de labels '{labels_path}' n'existe PAS.")
-            return model, None # Retourner le modèle même si les labels manquent pour diagnostic
+        # Utiliser TFSMLayer pour Keras 3
+        call_endpoint_name = 'serving_default' # Nom le plus courant
+        try:
+            model_layer = tf.keras.layers.TFSMLayer(abs_model_path, call_endpoint=call_endpoint_name)
+            st.success(f"Modèle TFSMLayer chargé avec endpoint '{call_endpoint_name}'.")
+        except Exception as e_tfsmlayer:
+            st.error(f"Erreur lors de la création de TFSMLayer avec endpoint '{call_endpoint_name}': {e_tfsmlayer}")
+            st.info("Tentative d'inspection des signatures du SavedModel...")
+            try:
+                loaded_sm = tf.saved_model.load(abs_model_path)
+                available_signatures = list(loaded_sm.signatures.keys())
+                st.info(f"Signatures disponibles dans le SavedModel : {available_signatures}")
+                if available_signatures and call_endpoint_name not in available_signatures:
+                    st.warning(f"L'endpoint '{call_endpoint_name}' n'est pas dans les signatures. Essayez l'une des signatures listées ci-dessus.")
+            except Exception as e_load_sm:
+                st.error(f"Impossible de charger le SavedModel avec tf.saved_model.load pour inspection: {e_load_sm}")
+            return None, None # Échec du chargement du modèle
 
-        with open(labels_path, "r") as f:
-            class_names = [line.strip().split(" ", 1)[1] if " " in line.strip() else line.strip() for line in f.readlines()]
-        return model, class_names
+        # Charger les labels
+        abs_labels_path = os.path.abspath(labels_path)
+        st.write(f"Tentative de chargement des labels depuis : {abs_labels_path}")
+        if not os.path.exists(abs_labels_path):
+            st.error(f"Le fichier de labels '{abs_labels_path}' n'existe PAS.")
+            return model_layer, None # Retourner le modèle même si les labels manquent
+
+        with open(abs_labels_path, "r") as f:
+            class_names_loaded = [line.strip().split(" ", 1)[1] if " " in line.strip() else line.strip() for line in f.readlines()]
+        st.success("Labels chargés.")
+        return model_layer, class_names_loaded
+
     except Exception as e:
-        st.error(f"Erreur lors du chargement du SavedModel ou des labels: {e}")
-        st.error(f"Vérifiez que le dossier '{model_dir_path}' existe et contient un SavedModel valide.")
-        st.error(f"Vérifiez que le fichier '{labels_path}' existe.")
-        return None, None
+        st.error(f"Erreur générale lors du chargement du SavedModel/labels: {e}")
+        return model_layer, class_names_loaded # Retourner ce qui a pu être chargé
 
-def predict_insect_saved_model(image_cv2, model, class_names, input_size):
-    """ Prédit la classe d'insecte à partir d'une image CV2 en utilisant un SavedModel."""
-    if model is None: # class_names peut être None si le fichier labels n'a pas été trouvé
+def predict_insect_saved_model(image_cv2, model_layer, class_names, input_size):
+    if model_layer is None:
         return "Erreur Modèle Non Chargé", 0.0, []
     if class_names is None:
         return "Erreur Labels Non Chargés", 0.0, []
 
-
-    # 1. Redimensionner à la taille d'entrée du modèle
     img_resized = cv2.resize(image_cv2, input_size, interpolation=cv2.INTER_AREA)
-
-    # 2. Convertir en tableau NumPy et normaliser
     image_array = np.asarray(img_resized, dtype=np.float32)
     normalized_image_array = (image_array / 127.5) - 1.0
-
-    # 3. Préparer le tenseur d'entrée pour le modèle
-    # Le SavedModel attend souvent un tf.Tensor
     input_tensor = tf.convert_to_tensor(normalized_image_array)
-    input_tensor = tf.expand_dims(input_tensor, axis=0) # Ajouter la dimension du batch
+    input_tensor = tf.expand_dims(input_tensor, axis=0)
 
-    # 4. Faire la prédiction
-    # Si le modèle a été chargé avec tf.keras.models.load_model, .predict() ou __call__() fonctionnent
-    predictions = model.predict(input_tensor)
-    # Alternativement : predictions = model(input_tensor, training=False)
+    predictions_np = None
+    try:
+        predictions_output = model_layer(input_tensor)
+        
+        if isinstance(predictions_output, dict):
+            st.info(f"Sortie du modèle (dict - clés): {list(predictions_output.keys())}")
+            # Teachable Machine a souvent une sortie tensor nommée 'sequential' ou le nom de la dernière couche.
+            # Ou parfois juste une clé comme 'output_0' ou la première si une seule.
+            # Pour les modèles d'image de TM, c'est souvent une seule sortie principale.
+            if len(predictions_output) == 1:
+                predictions_tensor = list(predictions_output.values())[0]
+            elif 'outputs' in predictions_output: # Format commun pour les modèles servis
+                 predictions_tensor = predictions_output['outputs']
+            elif 'output_0' in predictions_output: # Autre format commun
+                 predictions_tensor = predictions_output['output_0']
+            else: # Heuristique : prendre la première clé qui semble être un tensor de sortie de classif
+                # Cela peut nécessiter un ajustement basé sur l'inspection réelle.
+                key_found = None
+                for key, value in predictions_output.items():
+                    if isinstance(value, tf.Tensor) and len(value.shape) == 2 and value.shape[0] == 1: # Ex: (1, num_classes)
+                        predictions_tensor = value
+                        key_found = key
+                        st.info(f"Utilisation de la clé '{key_found}' du dictionnaire de sortie.")
+                        break
+                if key_found is None:
+                    st.error("Impossible de déterminer la bonne clé de sortie du dictionnaire du modèle.")
+                    return "Erreur Sortie Modèle Dict", 0.0, []
+        else:
+            predictions_tensor = predictions_output
 
-    # 5. Interpréter les résultats
-    predicted_class_index = np.argmax(predictions[0])
-    confidence_score = predictions[0][predicted_class_index]
+        if hasattr(predictions_tensor, 'numpy'):
+            predictions_np = predictions_tensor.numpy()
+        else:
+            predictions_np = np.array(predictions_tensor)
+
+    except Exception as e_predict:
+        st.error(f"Erreur lors de l'appel du modèle TFSMLayer ou du traitement de la sortie: {e_predict}")
+        return "Erreur Prédiction", 0.0, []
+
+    if predictions_np is None or predictions_np.size == 0:
+        return "Erreur Prédiction Vide", 0.0, []
+
+    predicted_class_index = np.argmax(predictions_np[0])
+    confidence_score = predictions_np[0][predicted_class_index]
     
     if predicted_class_index >= len(class_names):
-        return "Erreur Index Label", confidence_score, predictions[0]
-        
+        st.error(f"Index de classe prédit ({predicted_class_index}) hors limites pour les labels (taille: {len(class_names)}).")
+        return "Erreur Index Label", confidence_score, predictions_np[0]
+            
     label_name = class_names[predicted_class_index]
     
-    return label_name, confidence_score, predictions[0]
-
+    return label_name, confidence_score, predictions_np[0]
 
 def main():
     st.title("Détection, isolation et identification dʼinsectes")
     st.write("Application pour la détection globale et l'identification d'insectes sur plusieurs images.")
 
-    # --- Chargement du modèle SavedModel et des labels ---
-    # Note : Le chemin SAVED_MODEL_DIR_PATH doit être correct par rapport à la racine du projet
     model, class_names = load_saved_model_and_labels(SAVED_MODEL_DIR_PATH, LABELS_PATH)
 
     if model is None:
         st.warning("Le modèle d'identification (SavedModel) n'a pas pu être chargé. La fonctionnalité d'identification sera désactivée.")
-    if class_names is None and model is not None:
-        st.warning("Le fichier de labels n'a pas pu être chargé. L'identification affichera des index numériques.")
-
+    if class_names is None and model is not None: # Si le modèle a chargé mais pas les labels
+        st.warning("Le fichier de labels n'a pas pu être chargé. L'identification ne pourra pas afficher les noms de classe.")
 
     tab1, tab2, tab3 = st.tabs(["Segmentation", "Identification", "Guide dʼutilisation"])
 
@@ -296,7 +339,7 @@ def main():
                 st.markdown("---")
                 st.subheader("Détermination des Paramètres Globaux (basée sur la 1ère image)")
                 tuned_params_for_all_images = params_config_globally.copy()
-                if uploaded_files: # Ensure there's at least one file
+                if uploaded_files:
                     first_image_obj = uploaded_files[0]
                     first_image_bytes = first_image_obj.getvalue()
                     first_nparr = np.frombuffer(first_image_bytes, np.uint8)
@@ -408,10 +451,11 @@ def main():
                 diff_grand_total = abs(detected_total - expected_total)
                 if diff_grand_total == 0:
                     st.success("✅ Succès! Nombre total d'insectes détectés correspond au nombre attendu.")
-                elif diff_grand_total <= 0.1 * expected_total and expected_total > 0:
+                elif expected_total > 0 and diff_grand_total <= 0.1 * expected_total :
                     st.warning(f"⚠️ Attention: {detected_total} insectes détectés au total (attendu: {expected_total}, écart de {diff_grand_total}).")
-                else:
-                    st.error(f"❌ Erreur: {detected_total} insectes détectés au total (attendu: {expected_total}, écart important de {diff_grand_total}).")
+                else: # Cas où expected_total est 0 ou l'écart est grand
+                    st.error(f"❌ Écart: {detected_total} insectes détectés au total (attendu: {expected_total}, écart de {diff_grand_total}).")
+
 
                 if st.button("Télécharger TOUS les insectes isolés (carrés, fond blanc)"):
                     temp_dir = tempfile.mkdtemp()
@@ -448,7 +492,7 @@ def main():
         elif not st.session_state.get('segmentation_done', False) or not st.session_state.get('all_images_results'):
             st.info("Veuillez d'abord effectuer la segmentation dans l'onglet 'Segmentation'.")
         else:
-            st.info(f"Modèle d'identification (SavedModel) chargé. Classes: {', '.join(class_names)}")
+            st.info(f"Modèle d'identification (TFSMLayer) chargé. Classes détectées: {len(class_names) if class_names else 'N/A'}")
             st.write("Les insectes détectés dans la phase de segmentation vont être identifiés.")
 
             for i, result_item in enumerate(st.session_state.all_images_results):
@@ -478,37 +522,25 @@ def main():
                         else:
                             st.markdown(f"**Label:** {label}")
                             st.markdown(f"**Confiance:** {confidence*100:.2f}%")
-                            # Optionnel : Afficher les top N scores
-                            # import pandas as pd
-                            # if all_scores is not None and len(all_scores) > 0:
-                            #     top_n = min(3, len(class_names))
-                            #     top_indices = np.argsort(all_scores)[-top_n:][::-1]
-                            #     df_scores = pd.DataFrame({
-                            #         "Classe": [class_names[j] for j in top_indices],
-                            #         "Probabilité": [all_scores[j] for j in top_indices]
-                            #     })
-                            #     st.bar_chart(df_scores.set_index("Classe"))
                     col_idx += 1
 
     with tab3:
         st.header("Guide dʼoptimisation des paramètres")
-        st.subheader("Approche Globale de Traitement")
-        st.write("...") # Votre guide existant
         st.subheader("Identification des Insectes")
         st.write(f"""
-        Après la segmentation, l'onglet "Identification" utilise un modèle TensorFlow SavedModel pour classifier chaque insecte isolé.
-        - Le modèle attend des images carrées de taille {MODEL_INPUT_SIZE[0]}x{MODEL_INPUT_SIZE[1]} pixels. Les images extraites sont automatiquement redimensionnées et normalisées.
+        Après la segmentation, l'onglet "Identification" utilise un modèle TensorFlow SavedModel (chargé via TFSMLayer pour Keras 3) pour classifier chaque insecte isolé.
+        - Le modèle attend des images carrées de taille {MODEL_INPUT_SIZE[0]}x{MODEL_INPUT_SIZE[1]} pixels.
         - Les labels possibles sont : {', '.join(class_names) if class_names else "Labels non chargés"}.
-        - Pour chaque insecte, l'application affiche le label prédit et le pourcentage de confiance.
         """)
-        st.write("...") # Reste de votre guide
+        # ... (Ajoutez le reste de votre guide ici)
+
 
 if __name__ == "__main__":
     if 'segmentation_done' not in st.session_state:
         st.session_state.segmentation_done = False
     if 'all_images_results' not in st.session_state:
         st.session_state.all_images_results = []
-    if 'grand_total_detected_insects' not in st.session_state:
+    if 'grand_total_detected_insects' not in st.session_state: # Correction de la condition précédente
         st.session_state.grand_total_detected_insects = 0
     if 'expected_insects_grand_total' not in st.session_state:
         st.session_state.expected_insects_grand_total = 0
