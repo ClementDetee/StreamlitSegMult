@@ -1,8 +1,8 @@
 streamlit==1.29.0
 opencv-python-headless==4.8.1.78
-numpy>=1.26.0
+numpy~=1.19.2
 matplotlib>=3.8.0
 scikit-image>=0.21.0
 Pillow>=10.0.0
-tensorflow-cpu==2.4.3
+tensorflow-cpu==2.4.1
 h5py
