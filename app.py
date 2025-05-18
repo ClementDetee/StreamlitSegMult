@@ -11,6 +11,7 @@ import tempfile
 import zipfile
 import base64
 import tensorflow as tf # On utilise le tf.keras intégré
+from tensorflow import keras
 
 # --- Configuration du Modèle d'Identification (SavedModel) ---
 # Le chemin pointe vers le dossier qui contient saved_model.pb, variables/, etc.
