@@ -17,6 +17,7 @@ LABELS_PATH = "labels.txt"
 MODEL_INPUT_SIZE = (224, 224)
 
 # --- Fonctions de traitement d'image (inchangées) ---
+# ... (make_square, process_image, extract_insects restent les mêmes)
 def make_square(image, fill_color=(255, 255, 255)):
     height, width = image.shape[:2]
     max_side = max(height, width)
@@ -73,7 +74,7 @@ def process_image(image, params, expected_insects_for_image_info=0):
         kernel = np.ones((morph_kernel_size, morph_kernel_size), np.uint8)
         opening = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=morph_iterations)
         cleared = clear_border(opening)
-        labels = measure.label(cleared) # labels (image des régions numérotées)
+        labels = measure.label(cleared)
         filtered_props = best_filtered_props_auto
     else:
         thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, adapt_block_size, current_adapt_c)
@@ -83,7 +84,7 @@ def process_image(image, params, expected_insects_for_image_info=0):
         closing = cv2.morphologyEx(dilated_thresh, cv2.MORPH_CLOSE, kernel, iterations=morph_iterations)
         opening = cv2.morphologyEx(closing, cv2.MORPH_OPEN, kernel, iterations=1)
         cleared = clear_border(opening)
-        labels = measure.label(cleared) # labels (image des régions numérotées)
+        labels = measure.label(cleared)
         props = measure.regionprops(labels)
         pre_filter_props = [prop for prop in props if prop.area >= current_min_area]
         if use_circularity:
@@ -111,7 +112,6 @@ def process_image(image, params, expected_insects_for_image_info=0):
     final_params_used['adapt_c'] = current_adapt_c
     final_params_used['min_area'] = current_min_area
     final_params_used['blur_kernel'] = blur_kernel
-    # MODIFICATION : S'assurer de retourner aussi 'labels' (l'image des régions labellisées)
     return {"blurred": blurred, "thresh": thresh, "opening": opening, "labels": labels,
             "filtered_props": filtered_props, "params_used": final_params_used}
 
@@ -164,55 +164,49 @@ def extract_insects(image, filtered_props, margin):
         extracted_insects.append({"image": square_insect, "index": i, "original_prop": prop})
     return extracted_insects
 
-# --- Fonctions pour le modèle SavedModel avec Keras 3 (TFSMLayer) ---
+# --- Fonctions pour le modèle SavedModel (inchangées) ---
+# ... (load_saved_model_and_labels, predict_insect_saved_model, create_label_display_image restent les mêmes)
 @st.cache_resource
 def load_saved_model_and_labels(model_dir_path, labels_path):
     model_layer = None
     class_names_loaded = None
     try:
         abs_model_path = os.path.abspath(model_dir_path)
-        # st.write(f"Tentative de chargement du modèle depuis : {abs_model_path}") # Peut être décommenté pour debug
         if not os.path.exists(abs_model_path):
-            st.error(f"Le dossier du modèle '{abs_model_path}' n'existe PAS.")
+            # st.error(f"Le dossier du modèle '{abs_model_path}' n'existe PAS.") # Erreurs affichées dans l'app
+            print(f"DEBUG: Le dossier du modèle '{abs_model_path}' n'existe PAS.")
             return None, None
         if not os.path.isdir(abs_model_path):
-            st.error(f"'{abs_model_path}' n'est PAS un dossier.")
+            print(f"DEBUG: '{abs_model_path}' n'est PAS un dossier.")
             return None, None
         if not os.path.exists(os.path.join(abs_model_path, "saved_model.pb")):
-            st.error(f"Le fichier 'saved_model.pb' est manquant dans '{abs_model_path}'.")
-            # st.error(f"Contenu du dossier '{abs_model_path}': {os.listdir(abs_model_path) if os.path.exists(abs_model_path) else 'Dossier non trouvé'}")
+            print(f"DEBUG: Le fichier 'saved_model.pb' est manquant dans '{abs_model_path}'.")
             return None, None
 
         call_endpoint_name = 'serving_default'
         try:
             model_layer = tf.keras.layers.TFSMLayer(abs_model_path, call_endpoint=call_endpoint_name)
-            # st.success(f"Modèle TFSMLayer chargé avec endpoint '{call_endpoint_name}'.") # Peut être décommenté pour debug
         except Exception as e_tfsmlayer:
-            st.error(f"Erreur lors de la création de TFSMLayer avec endpoint '{call_endpoint_name}': {e_tfsmlayer}")
-            # st.info("Tentative d'inspection des signatures du SavedModel...") # Peut être décommenté pour debug
+            print(f"DEBUG: Erreur TFSMLayer: {e_tfsmlayer}")
             try:
                 loaded_sm = tf.saved_model.load(abs_model_path)
                 available_signatures = list(loaded_sm.signatures.keys())
-                st.info(f"Signatures disponibles dans le SavedModel : {available_signatures}")
-                if available_signatures and call_endpoint_name not in available_signatures:
-                    st.warning(f"L'endpoint '{call_endpoint_name}' n'est pas dans les signatures. Essayez l'une des signatures listées ci-dessus.")
+                print(f"DEBUG: Signatures disponibles: {available_signatures}")
             except Exception as e_load_sm:
-                st.error(f"Impossible de charger le SavedModel avec tf.saved_model.load pour inspection: {e_load_sm}")
+                print(f"DEBUG: Erreur chargement SavedModel pour inspection: {e_load_sm}")
             return None, None
 
         abs_labels_path = os.path.abspath(labels_path)
-        # st.write(f"Tentative de chargement des labels depuis : {abs_labels_path}") # Peut être décommenté pour debug
         if not os.path.exists(abs_labels_path):
-            st.error(f"Le fichier de labels '{abs_labels_path}' n'existe PAS.")
+            print(f"DEBUG: Le fichier de labels '{abs_labels_path}' n'existe PAS.")
             return model_layer, None
 
         with open(abs_labels_path, "r") as f:
             class_names_loaded = [line.strip().split(" ", 1)[1] if " " in line.strip() else line.strip() for line in f.readlines()]
-        # st.success("Labels chargés.") # Peut être décommenté pour debug
         return model_layer, class_names_loaded
 
     except Exception as e:
-        st.error(f"Erreur générale lors du chargement du SavedModel/labels: {e}")
+        print(f"DEBUG: Erreur générale chargement modèle/labels: {e}")
         return model_layer, class_names_loaded
 
 def predict_insect_saved_model(image_cv2, model_layer, class_names, input_size):
@@ -232,7 +226,6 @@ def predict_insect_saved_model(image_cv2, model_layer, class_names, input_size):
         predictions_output = model_layer(input_tensor)
         
         if isinstance(predictions_output, dict):
-            # st.info(f"Sortie du modèle (dict - clés): {list(predictions_output.keys())}") # Peut être décommenté pour debug
             if len(predictions_output) == 1:
                 predictions_tensor = list(predictions_output.values())[0]
             elif 'outputs' in predictions_output:
@@ -245,10 +238,8 @@ def predict_insect_saved_model(image_cv2, model_layer, class_names, input_size):
                     if isinstance(value, tf.Tensor) and len(value.shape) == 2 and value.shape[0] == 1:
                         predictions_tensor = value
                         key_found = key
-                        # st.info(f"Utilisation de la clé '{key_found}' du dictionnaire de sortie.") # Peut être décommenté pour debug
                         break
                 if key_found is None:
-                    st.error("Impossible de déterminer la bonne clé de sortie du dictionnaire du modèle.")
                     return "Erreur Sortie Modèle Dict", 0.0, []
         else:
             predictions_tensor = predictions_output
@@ -259,7 +250,7 @@ def predict_insect_saved_model(image_cv2, model_layer, class_names, input_size):
             predictions_np = np.array(predictions_tensor)
 
     except Exception as e_predict:
-        st.error(f"Erreur lors de l'appel du modèle TFSMLayer ou du traitement de la sortie: {e_predict}")
+        print(f"DEBUG: Erreur prédiction: {e_predict}")
         return "Erreur Prédiction", 0.0, []
 
     if predictions_np is None or predictions_np.size == 0:
@@ -269,39 +260,23 @@ def predict_insect_saved_model(image_cv2, model_layer, class_names, input_size):
     confidence_score = predictions_np[0][predicted_class_index]
     
     if predicted_class_index >= len(class_names):
-        st.error(f"Index de classe prédit ({predicted_class_index}) hors limites pour les labels (taille: {len(class_names)}).")
         return "Erreur Index Label", confidence_score, predictions_np[0]
             
     label_name = class_names[predicted_class_index]
     
     return label_name, confidence_score, predictions_np[0]
 
-# MODIFICATION: Fonction pour générer l'image des labels colorés
 def create_label_display_image(label_image_data, filtered_props):
-    """Crée une image avec les régions détectées colorées."""
-    # S'assurer que label_image_data est une image 2D (carte de labels)
     if label_image_data.ndim == 3 and label_image_data.shape[2] == 1:
         label_image_data = label_image_data.squeeze(axis=2)
     elif label_image_data.ndim != 2:
-        # Fallback: créer une image noire si les données ne sont pas correctes
-        st.warning("Données d'image de labels inattendues, affichage d'une image noire.")
-        # Utiliser une shape de référence si possible, sinon une taille par défaut
-        # Par exemple, si filtered_props n'est pas vide, on peut essayer d'estimer la shape
-        # Pour l'instant, on va juste créer une petite image noire
-        if filtered_props and hasattr(filtered_props[0], 'image'):
-             h, w = filtered_props[0].image.shape[:2] # Attention, la shape des props est celle de l'objet, pas de l'image entière
-        else: # Si on n'a pas de ref, image par défaut
-             h, w = 200, 200 # Fallback
+        h, w = (200, 200) if not filtered_props or not hasattr(filtered_props[0], 'image') else filtered_props[0].image.shape[:2]
         return np.zeros((h, w, 3), dtype=np.uint8)
-
 
     label_display = np.zeros((label_image_data.shape[0], label_image_data.shape[1], 3), dtype=np.uint8)
     for prop_item in filtered_props:
-        # Générer une couleur aléatoire (mais consistante si possible, ou utiliser un colormap)
-        # Pour la simplicité, on garde aléatoire pour l'instant
-        color = np.random.randint(50, 256, size=3) # Éviter les couleurs trop sombres
+        color = np.random.randint(50, 256, size=3)
         for coord in prop_item.coords:
-            # Vérifier les limites pour éviter les erreurs si les coords sont hors de l'image
             if 0 <= coord[0] < label_display.shape[0] and 0 <= coord[1] < label_display.shape[1]:
                 label_display[coord[0], coord[1]] = color
     return label_display
@@ -310,10 +285,6 @@ def main():
     st.title("Détection, isolation et identification dʼinsectes")
     st.write("Application pour la détection globale et l'identification d'insectes sur plusieurs images.")
 
-    # MODIFICATION : Initialiser un état pour contrôler l'ouverture de la sidebar
-    if 'sidebar_state' not in st.session_state:
-        st.session_state.sidebar_state = 'expanded' # 'expanded' ou 'collapsed'
-
     model, class_names = load_saved_model_and_labels(SAVED_MODEL_DIR_PATH, LABELS_PATH)
 
     if model is None:
@@ -321,174 +292,135 @@ def main():
     if class_names is None and model is not None:
         st.warning("Le fichier de labels n'a pas pu être chargé. L'identification ne pourra pas afficher les noms de classe.")
 
-    # MODIFICATION : Utiliser st.sidebar avec with pour que les widgets soient bien dedans
-    # et contrôler son état initial
-    with st.sidebar: # Cela force la sidebar à être présente
+    # --- Sidebar pour les paramètres ---
+    with st.sidebar:
         st.header("Paramètres de détection Globaux")
-        # Les widgets de la sidebar sont définis ici
-        # Pour éviter qu'ils se réinitialisent à chaque rerun, on peut utiliser st.session_state
-        # pour leurs valeurs par défaut, ou s'assurer que les clés sont stables.
-
-        # Exemple d'utilisation de session_state pour un widget (si nécessaire plus tard)
-        # if 'expected_insects_grand_total_val' not in st.session_state:
-        #     st.session_state.expected_insects_grand_total_val = 3 # Valeur par défaut initiale
-
-        # Le nombre d'images est calculé dynamiquement, donc pas besoin de session_state pour sa valeur initiale
-        # si 'uploaded_files' existe déjà dans session_state ou est chargé.
-        # Le problème de la sidebar qui se ferme est souvent lié à un st.rerun() qui perd le contexte
-        # ou à des widgets qui ne sont pas toujours présents.
-        # En mettant tous les widgets de la sidebar dans ce bloc 'with st.sidebar:',
-        # ils devraient être plus stables.
-
-        uploaded_files_sidebar = st.session_state.get('uploaded_files_for_sidebar', None)
-        default_expected_insects = len(uploaded_files_sidebar) * 3 if uploaded_files_sidebar else 3
-
+        
+        default_expected_insects = len(st.session_state.get('uploaded_files_main_cache', [])) * 3 if st.session_state.get('uploaded_files_main_cache') else 3
         expected_insects_grand_total = st.number_input(
             "Nombre total dʼinsectes attendus (toutes images)", 
             min_value=1, 
             value=st.session_state.get('expected_insects_grand_total_val', default_expected_insects), 
             step=1, 
-            key='expected_insects_grand_total_key' # Clé stable
+            key='expected_insects_grand_total_key'
         )
         st.session_state.expected_insects_grand_total_val = expected_insects_grand_total
-
 
         presets = {
             "Par défaut": {"blur_kernel": 7, "adapt_block_size": 35, "adapt_c": 5, "morph_kernel": 3, "morph_iterations": 2, "min_area": 100, "margin": 15},
             "Grands insectes": {"blur_kernel": 7, "adapt_block_size": 35, "adapt_c": 8, "morph_kernel": 5, "morph_iterations": 2, "min_area": 300, "margin": 15},
         }
-        
-        # Initialiser preset_choice_val si non existant
-        if 'preset_choice_val' not in st.session_state:
-            st.session_state.preset_choice_val = "Par défaut" # Ou l'index correspondant
-        
         preset_choice_options = ["Personnalisé", "Auto-ajustement C/Aire Global"] + list(presets.keys())
-        # Trouver l'index de la valeur stockée, ou 0 si non trouvée
         try:
-            default_preset_index = preset_choice_options.index(st.session_state.preset_choice_val)
+            default_preset_index = preset_choice_options.index(st.session_state.get('preset_choice_val', "Par défaut"))
         except ValueError:
-            default_preset_index = 2 # Index de "Par défaut"
-
+            default_preset_index = 2
         preset_choice = st.selectbox(
             "Configurations prédéfinies", 
             preset_choice_options, 
             index=default_preset_index, 
-            key='preset_choice_key' # Clé stable
+            key='preset_choice_key'
         )
         st.session_state.preset_choice_val = preset_choice
 
-
-        # Initialiser les paramètres basés sur le preset ou les valeurs stockées
-        # On utilise une fonction pour éviter la répétition
-        def get_initial_param_value(param_name, default_value_map, chosen_preset, global_config_map):
-            if chosen_preset != "Personnalisé" and chosen_preset != "Auto-ajustement C/Aire Global":
-                return default_value_map[chosen_preset].get(param_name, global_config_map[param_name])
-            return st.session_state.get(f'{param_name}_val', global_config_map[param_name])
-
-        # Configuration de base (valeurs par défaut si rien n'est stocké)
         base_params_config = presets["Par défaut"].copy()
+        def get_initial_param_value(param_name, default_value_map, chosen_preset, global_config_map, session_key_suffix='_val'):
+            session_key = f'{param_name}{session_key_suffix}'
+            if chosen_preset != "Personnalisé" and chosen_preset != "Auto-ajustement C/Aire Global":
+                # Si un preset est choisi, on prend sa valeur, sinon la valeur de base_params_config
+                preset_value = default_value_map.get(chosen_preset, {}).get(param_name)
+                if preset_value is not None:
+                    st.session_state[session_key] = preset_value # Mettre à jour session_state avec la valeur du preset
+                    return preset_value
+            # Sinon, on prend la valeur de session_state si elle existe, sinon la valeur de base
+            return st.session_state.get(session_key, global_config_map.get(param_name, 0))
 
-        params_config_globally_sidebar = {}
-        params_config_globally_sidebar["blur_kernel"] = st.slider("Noyau de flou gaussien", 1, 21, get_initial_param_value("blur_kernel", presets, preset_choice, base_params_config), step=2, key="blur_glob_key")
-        st.session_state.blur_kernel_val = params_config_globally_sidebar["blur_kernel"]
 
-        params_config_globally_sidebar["adapt_block_size"] = st.slider("Taille du bloc adaptatif", 3, 51, get_initial_param_value("adapt_block_size", presets, preset_choice, base_params_config), step=2, key="block_glob_key")
-        st.session_state.adapt_block_size_val = params_config_globally_sidebar["adapt_block_size"]
+        current_params_config = {}
+        current_params_config["blur_kernel"] = st.slider("Noyau de flou gaussien", 1, 21, get_initial_param_value("blur_kernel", presets, preset_choice, base_params_config), step=2, key="blur_glob_key_slider")
+        st.session_state.blur_kernel_val = current_params_config["blur_kernel"]
+
+        current_params_config["adapt_block_size"] = st.slider("Taille du bloc adaptatif", 3, 51, get_initial_param_value("adapt_block_size", presets, preset_choice, base_params_config), step=2, key="block_glob_key_slider")
+        st.session_state.adapt_block_size_val = current_params_config["adapt_block_size"]
         
-        params_config_globally_sidebar["adapt_c"] = st.slider("Constante de seuillage C", -10, 30, get_initial_param_value("adapt_c", presets, preset_choice, base_params_config), key="c_glob_key")
-        st.session_state.adapt_c_val = params_config_globally_sidebar["adapt_c"]
+        current_params_config["adapt_c"] = st.slider("Constante de seuillage C", -10, 30, get_initial_param_value("adapt_c", presets, preset_choice, base_params_config), key="c_glob_key_slider")
+        st.session_state.adapt_c_val = current_params_config["adapt_c"]
 
-        params_config_globally_sidebar["min_area"] = st.slider("Surface minimale Aire", 10, 1000, get_initial_param_value("min_area", presets, preset_choice, base_params_config), key="area_glob_key")
-        st.session_state.min_area_val = params_config_globally_sidebar["min_area"]
+        current_params_config["min_area"] = st.slider("Surface minimale Aire", 10, 1000, get_initial_param_value("min_area", presets, preset_choice, base_params_config), key="area_glob_key_slider")
+        st.session_state.min_area_val = current_params_config["min_area"]
 
-        params_config_globally_sidebar["morph_kernel"] = st.slider("Noyau morphologique", 1, 9, get_initial_param_value("morph_kernel", presets, preset_choice, base_params_config), step=2, key="morph_k_glob_key")
-        st.session_state.morph_kernel_val = params_config_globally_sidebar["morph_kernel"]
+        current_params_config["morph_kernel"] = st.slider("Noyau morphologique", 1, 9, get_initial_param_value("morph_kernel", presets, preset_choice, base_params_config), step=2, key="morph_k_glob_key_slider")
+        st.session_state.morph_kernel_val = current_params_config["morph_kernel"]
         
-        params_config_globally_sidebar["morph_iterations"] = st.slider("Itérations morphologiques", 1, 5, get_initial_param_value("morph_iterations", presets, preset_choice, base_params_config), key="morph_i_glob_key")
-        st.session_state.morph_iterations_val = params_config_globally_sidebar["morph_iterations"]
+        current_params_config["morph_iterations"] = st.slider("Itérations morphologiques", 1, 5, get_initial_param_value("morph_iterations", presets, preset_choice, base_params_config), key="morph_i_glob_key_slider")
+        st.session_state.morph_iterations_val = current_params_config["morph_iterations"]
 
-        params_config_globally_sidebar["margin"] = st.slider("Marge autour des insectes", 0, 50, get_initial_param_value("margin", presets, preset_choice, base_params_config), key="margin_glob_key")
-        st.session_state.margin_val = params_config_globally_sidebar["margin"]
+        current_params_config["margin"] = st.slider("Marge autour des insectes", 0, 50, get_initial_param_value("margin", presets, preset_choice, base_params_config), key="margin_glob_key_slider")
+        st.session_state.margin_val = current_params_config["margin"]
+        
+        current_params_config["use_circularity"] = st.checkbox("Filtrer par circularité", value=st.session_state.get('use_circularity_val', False), key="circularity_check_key_box")
+        st.session_state.use_circularity_val = current_params_config["use_circularity"]
 
-        # Checkboxes
-        if 'use_circularity_val' not in st.session_state:
-            st.session_state.use_circularity_val = False
-        params_config_globally_sidebar["use_circularity"] = st.checkbox("Filtrer par circularité", value=st.session_state.use_circularity_val, key="circularity_check_key")
-        st.session_state.use_circularity_val = params_config_globally_sidebar["use_circularity"]
-
-        if params_config_globally_sidebar["use_circularity"]:
-            if 'min_circularity_val' not in st.session_state:
-                st.session_state.min_circularity_val = 0.3
-            params_config_globally_sidebar["min_circularity"] = st.slider("Circularité minimale", 0.0, 1.0, st.session_state.min_circularity_val, step=0.05, key="min_circularity_key")
-            st.session_state.min_circularity_val = params_config_globally_sidebar["min_circularity"]
+        if current_params_config["use_circularity"]:
+            current_params_config["min_circularity"] = st.slider("Circularité minimale", 0.0, 1.0, st.session_state.get('min_circularity_val', 0.3), step=0.05, key="min_circularity_key_slider")
+            st.session_state.min_circularity_val = current_params_config["min_circularity"]
         else:
-            params_config_globally_sidebar["min_circularity"] = 0.3 # Valeur par défaut si non utilisé
+            current_params_config["min_circularity"] = st.session_state.get('min_circularity_val', 0.3) # Garder la valeur même si non affiché
 
-        if 'auto_adjust_blur_val' not in st.session_state:
-            st.session_state.auto_adjust_blur_val = False
-        should_auto_adjust_blur_globally_sidebar = st.checkbox("Auto-ajustement du Flou Global (sur 1ère image)", value=st.session_state.auto_adjust_blur_val, key="auto_blur_key")
-        st.session_state.auto_adjust_blur_val = should_auto_adjust_blur_globally_sidebar
+        should_auto_adjust_blur_globally = st.checkbox("Auto-ajustement du Flou Global (sur 1ère image)", value=st.session_state.get('auto_adjust_blur_val', False), key="auto_blur_key_box")
+        st.session_state.auto_adjust_blur_val = should_auto_adjust_blur_globally
         
-        # Bouton pour lancer le traitement, qui utilise les valeurs de la sidebar
-        # Ce bouton doit être DANS l'onglet "Segmentation", pas dans la sidebar
-        # La sidebar est juste pour configurer les paramètres.
+        # Passer les paramètres actuels à la session_state pour utilisation dans l'onglet principal
+        st.session_state.current_processing_params = current_params_config
+        st.session_state.current_preset_choice_for_logic = preset_choice # Pour la logique d'auto-ajustement
+        st.session_state.current_should_auto_adjust_blur_for_logic = should_auto_adjust_blur_globally
 
 
     tab1, tab2, tab3 = st.tabs(["Segmentation", "Identification", "Guide dʼutilisation"])
 
     with tab1:
         st.header("Phase 1 : Détection et Segmentation des insectes")
-        uploaded_files_main = st.file_uploader("Choisissez une ou plusieurs images pour la segmentation", type=["jpg", "jpeg", "png"], accept_multiple_files=True, key="file_uploader_main")
-        
-        # MODIFICATION: Mettre à jour uploaded_files_for_sidebar pour le calcul de la valeur par défaut
-        st.session_state.uploaded_files_for_sidebar = uploaded_files_main
+        uploaded_files_main = st.file_uploader(
+            "Choisissez une ou plusieurs images pour la segmentation", 
+            type=["jpg", "jpeg", "png"], 
+            accept_multiple_files=True, 
+            key="file_uploader_main_tab1" # Clé unique pour ce file_uploader
+        )
+        st.session_state.uploaded_files_main_cache = uploaded_files_main # Cache pour la sidebar
 
-        # Bouton pour démarrer le traitement. Il utilise les valeurs de la sidebar (params_config_globally_sidebar)
-        if st.button("Lancer la Segmentation et Détermination des Paramètres Globaux", key="start_segmentation_button"):
-            st.session_state.segmentation_done = False # Réinitialiser avant de commencer
-            st.session_state.all_images_results = [] # Vider les résultats précédents
-            st.rerun() # Rerun pour s'assurer que les états sont pris en compte avant la longue exécution
-
+        # MODIFICATION : Logique de segmentation automatique
         if uploaded_files_main:
-            # Si le bouton a été cliqué et que la segmentation n'est pas encore faite
-            # ou si la segmentation est déjà faite (pour afficher les résultats)
-            if not st.session_state.get('segmentation_done', False) and 'start_segmentation_button' in st.session_state and st.session_state.start_segmentation_button:
-                
-                # Récupérer les paramètres depuis les widgets de la sidebar
-                # (qui ont été stockés dans st.session_state ou sont directement accessibles via leurs clés)
-                current_params_config = {
-                    "blur_kernel": st.session_state.blur_kernel_val,
-                    "adapt_block_size": st.session_state.adapt_block_size_val,
-                    "adapt_c": st.session_state.adapt_c_val,
-                    "min_area": st.session_state.min_area_val,
-                    "morph_kernel": st.session_state.morph_kernel_val,
-                    "morph_iterations": st.session_state.morph_iterations_val,
-                    "margin": st.session_state.margin_val,
-                    "use_circularity": st.session_state.use_circularity_val,
-                    "min_circularity": st.session_state.get('min_circularity_val', 0.3) # get avec défaut
-                }
-                current_preset_choice = st.session_state.preset_choice_val
-                current_should_auto_adjust_blur = st.session_state.auto_adjust_blur_val
-                current_expected_total = st.session_state.expected_insects_grand_total_val
+            # Vérifier si les fichiers ont changé depuis la dernière exécution pour ce lot
+            current_file_names = [f.name for f in uploaded_files_main]
+            if st.session_state.get('last_processed_file_names') != current_file_names or \
+               not st.session_state.get('segmentation_done', False) : # Si nouveaux fichiers ou segmentation pas faite
 
+                st.session_state.segmentation_done = False # Marquer comme non fait pour ce nouveau lot / exécution
+                st.session_state.all_images_results = [] 
+                
+                # Récupérer les paramètres configurés dans la sidebar
+                params_to_use = st.session_state.current_processing_params
+                active_preset_choice = st.session_state.current_preset_choice_for_logic
+                active_should_auto_adjust_blur = st.session_state.current_should_auto_adjust_blur_for_logic
+                active_expected_total_insects = st.session_state.expected_insects_grand_total_val
 
                 all_images_results_temp = []
                 grand_total_detected_insects = 0
                 
                 st.markdown("---")
                 st.subheader("Détermination des Paramètres Globaux (basée sur la 1ère image)")
-                tuned_params_for_all_images = current_params_config.copy() # Commence avec les valeurs de la sidebar
+                tuned_params_for_all_images = params_to_use.copy()
 
                 first_image_obj = uploaded_files_main[0]
                 first_image_bytes = first_image_obj.getvalue()
                 first_nparr = np.frombuffer(first_image_bytes, np.uint8)
                 first_cv_image = cv2.imdecode(first_nparr, cv2.IMREAD_COLOR)
-                expected_for_first_image_tuning = max(1, round(current_expected_total / len(uploaded_files_main)))
+                expected_for_first_image_tuning = max(1, round(active_expected_total_insects / len(uploaded_files_main)))
                 st.write(f"Image de référence pour l'ajustement global: {first_image_obj.name} (cible pour cette image: ~{expected_for_first_image_tuning} insectes)")
 
-                should_auto_adjust_c_area_globally_main = (current_preset_choice == "Auto-ajustement C/Aire Global")
+                should_auto_adjust_c_area_logic = (active_preset_choice == "Auto-ajustement C/Aire Global")
 
-                if should_auto_adjust_c_area_globally_main:
+                if should_auto_adjust_c_area_logic:
                     with st.spinner("Ajustement global C/Aire en cours..."):
                         params_for_c_area_tune = tuned_params_for_all_images.copy()
                         params_for_c_area_tune["auto_adjust_for_internal_tune"] = True
@@ -497,7 +429,7 @@ def main():
                         tuned_params_for_all_images["min_area"] = c_area_tune_data["params_used"]["min_area"]
                     st.success(f"Global C/Aire déterminés: C={tuned_params_for_all_images['adapt_c']}, Aire Min={tuned_params_for_all_images['min_area']}")
 
-                if current_should_auto_adjust_blur:
+                if active_should_auto_adjust_blur:
                     with st.spinner("Ajustement global du Flou en cours..."):
                         blur_kernel_options = [k for k in range(1, 22, 2)]
                         best_blur_found_globally = tuned_params_for_all_images["blur_kernel"]
@@ -507,24 +439,24 @@ def main():
                         for trial_blur in blur_kernel_options:
                             params_for_blur_trial = tuned_params_for_all_images.copy()
                             params_for_blur_trial["blur_kernel"] = trial_blur
-                            params_for_blur_trial["auto_adjust_for_internal_tune"] = should_auto_adjust_c_area_globally_main
+                            params_for_blur_trial["auto_adjust_for_internal_tune"] = should_auto_adjust_c_area_logic
                             trial_data = process_image(first_cv_image, params_for_blur_trial, expected_for_first_image_tuning)
                             trial_num_detected = len(trial_data["filtered_props"])
                             trial_diff = abs(trial_num_detected - expected_for_first_image_tuning)
                             if trial_diff < min_diff_for_global_blur:
                                 min_diff_for_global_blur = trial_diff
                                 best_blur_found_globally = trial_blur
-                                if should_auto_adjust_c_area_globally_main:
+                                if should_auto_adjust_c_area_logic:
                                     c_after_blur_tune = trial_data["params_used"]["adapt_c"]
                                     area_after_blur_tune = trial_data["params_used"]["min_area"]
                             elif trial_diff == min_diff_for_global_blur and trial_blur < best_blur_found_globally:
                                 best_blur_found_globally = trial_blur
-                                if should_auto_adjust_c_area_globally_main:
+                                if should_auto_adjust_c_area_logic:
                                     c_after_blur_tune = trial_data["params_used"]["adapt_c"]
                                     area_after_blur_tune = trial_data["params_used"]["min_area"]
                             if min_diff_for_global_blur == 0: break
                         tuned_params_for_all_images["blur_kernel"] = best_blur_found_globally
-                        if should_auto_adjust_c_area_globally_main:
+                        if should_auto_adjust_c_area_logic:
                             tuned_params_for_all_images["adapt_c"] = c_after_blur_tune
                             tuned_params_for_all_images["min_area"] = area_after_blur_tune
                             st.success(f"Global Flou déterminé: {tuned_params_for_all_images['blur_kernel']}. Global C/Aire (après Flou): C={tuned_params_for_all_images['adapt_c']}, Aire Min={tuned_params_for_all_images['min_area']}")
@@ -532,7 +464,7 @@ def main():
                             st.success(f"Global Flou déterminé: {tuned_params_for_all_images['blur_kernel']}.")
                 
                 tuned_params_for_all_images["auto_adjust_for_internal_tune"] = False
-                st.session_state.tuned_params_for_all_images = tuned_params_for_all_images # Stocker les params finaux
+                st.session_state.tuned_params_for_all_images = tuned_params_for_all_images
                 
                 st.markdown("---")
                 st.subheader("Traitement des Images avec Paramètres Globaux")
@@ -540,119 +472,108 @@ def main():
 
                 with st.spinner("Traitement de toutes les images..."):
                     for file_index, uploaded_file in enumerate(uploaded_files_main):
-                        # Pas besoin d'afficher le nom de chaque image ici, on le fera plus bas
                         file_bytes = uploaded_file.getvalue()
                         nparr = np.frombuffer(file_bytes, np.uint8)
                         cv_image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                        
                         processed_data = process_image(cv_image, st.session_state.tuned_params_for_all_images, 0)
                         current_filtered_props = processed_data["filtered_props"]
                         num_detected_this_image = len(current_filtered_props)
                         grand_total_detected_insects += num_detected_this_image
-                        
                         all_images_results_temp.append({
-                            "filename": uploaded_file.name, 
-                            "image_bytes": file_bytes,
-                            "cv_image_color": cv_image, # Stocker l'image CV pour affichage direct
-                            "processed_data": processed_data, # Contient 'labels' et 'filtered_props'
+                            "filename": uploaded_file.name, "image_bytes": file_bytes,
+                            "cv_image_color": cv_image, "processed_data": processed_data,
                             "num_detected": num_detected_this_image,
                             "params_used_for_extraction": st.session_state.tuned_params_for_all_images.copy()
                         })
-
                 st.session_state.all_images_results = all_images_results_temp
                 st.session_state.grand_total_detected_insects = grand_total_detected_insects
-                st.session_state.expected_insects_grand_total_final = current_expected_total # Stocker la valeur utilisée
+                st.session_state.expected_insects_grand_total_final = active_expected_total_insects
                 st.session_state.segmentation_done = True
-                st.session_state.start_segmentation_button = False # Réinitialiser l'état du bouton
-                st.rerun() # Rerun pour afficher les résultats et l'état mis à jour
+                st.session_state.last_processed_file_names = current_file_names # Mémoriser les fichiers traités
+                st.rerun() # Pour rafraîchir et afficher les résultats ci-dessous
 
-            # Afficher les résultats si la segmentation est terminée
-            if st.session_state.get('segmentation_done', False):
-                st.header("Résultats de la Segmentation par Image")
-                for idx, result_item in enumerate(st.session_state.all_images_results):
-                    st.markdown(f"#### Image {idx + 1}: {result_item['filename']}")
-                    
-                    # MODIFICATION : Afficher l'original et les labels segmentés côte à côte
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.image(cv2.cvtColor(result_item["cv_image_color"], cv2.COLOR_BGR2RGB), 
-                                 caption=f"Originale ({result_item['cv_image_color'].shape[1]}x{result_item['cv_image_color'].shape[0]})", 
-                                 use_column_width=True)
-                    
-                    with col2:
-                        # 'labels' est l'image des régions (avant filtrage par props)
-                        # 'filtered_props' sont les régions effectivement conservées
-                        label_image_from_processing = result_item["processed_data"]["labels"]
-                        filtered_props_for_display = result_item["processed_data"]["filtered_props"]
-                        
-                        display_img_labels = create_label_display_image(label_image_from_processing, filtered_props_for_display)
-                        st.image(display_img_labels, 
-                                 caption=f"Insectes Détectés: {result_item['num_detected']}", 
-                                 use_column_width=True)
-
-                    stat_col1, stat_col2 = st.columns(2)
-                    stat_col1.metric(f"Insectes détectés (Image {idx+1})", result_item['num_detected'])
-                    if result_item["processed_data"]["filtered_props"]:
-                        areas_this_image = [prop.area for prop in result_item["processed_data"]["filtered_props"]]
-                        stat_col2.metric(f"Surface moyenne (Image {idx+1}, px)", f"{int(np.mean(areas_this_image)) if areas_this_image else 0}")
-                    else:
-                        stat_col2.metric(f"Surface moyenne (Image {idx+1}, px)", "N/A")
-
-                    # Aperçu des insectes extraits (si présents)
-                    if result_item["processed_data"]["filtered_props"] and result_item['num_detected'] > 0 :
-                        # Utiliser tuned_params_for_all_images stocké pour la marge
-                        margin_for_preview = st.session_state.tuned_params_for_all_images["margin"]
-                        extracted_preview = extract_insects(result_item["cv_image_color"], result_item["processed_data"]["filtered_props"][:min(3, result_item['num_detected'])], margin_for_preview)
-                        if extracted_preview:
-                            st.write("Aperçu des 1ers insectes extraits:")
-                            preview_cols_ext = st.columns(len(extracted_preview))
-                            for i_ext, insect_ext_data in enumerate(extracted_preview):
-                                preview_cols_ext[i_ext].image(cv2.cvtColor(insect_ext_data["image"], cv2.COLOR_BGR2RGB), width=100)
-                    st.markdown("---")
-
-
-                st.header("Résultats Globaux Finaux de la Segmentation")
-                expected_total_final = st.session_state.get('expected_insects_grand_total_final',0)
-                detected_total_final = st.session_state.get('grand_total_detected_insects',0)
-                st.metric("Nombre TOTAL d'insectes attendus (toutes images)", expected_total_final)
-                st.metric("Nombre TOTAL d'insectes détectés (toutes images)", detected_total_final)
-                diff_grand_total = abs(detected_total_final - expected_total_final)
-                if diff_grand_total == 0 and expected_total_final > 0 : # Ajout de condition pour éviter succès si 0 attendu et 0 trouvé
-                    st.success("✅ Succès! Nombre total d'insectes détectés correspond au nombre attendu.")
-                elif expected_total_final > 0 and diff_grand_total <= 0.1 * expected_total_final :
-                    st.warning(f"⚠️ Attention: {detected_total_final} insectes détectés au total (attendu: {expected_total_final}, écart de {diff_grand_total}).")
+        # Afficher les résultats si la segmentation est terminée pour le lot actuel
+        if st.session_state.get('segmentation_done', False) and st.session_state.get('all_images_results'):
+            st.header("Résultats de la Segmentation par Image")
+            for idx, result_item in enumerate(st.session_state.all_images_results):
+                st.markdown(f"#### Image {idx + 1}: {result_item['filename']}")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.image(cv2.cvtColor(result_item["cv_image_color"], cv2.COLOR_BGR2RGB), 
+                             caption=f"Originale ({result_item['cv_image_color'].shape[1]}x{result_item['cv_image_color'].shape[0]})", 
+                             use_column_width=True)
+                with col2:
+                    label_image_from_processing = result_item["processed_data"]["labels"]
+                    filtered_props_for_display = result_item["processed_data"]["filtered_props"]
+                    display_img_labels = create_label_display_image(label_image_from_processing, filtered_props_for_display)
+                    st.image(display_img_labels, 
+                             caption=f"Insectes Détectés: {result_item['num_detected']}", 
+                             use_column_width=True)
+                stat_col1, stat_col2 = st.columns(2)
+                stat_col1.metric(f"Insectes détectés (Image {idx+1})", result_item['num_detected'])
+                if result_item["processed_data"]["filtered_props"]:
+                    areas_this_image = [prop.area for prop in result_item["processed_data"]["filtered_props"]]
+                    stat_col2.metric(f"Surface moyenne (Image {idx+1}, px)", f"{int(np.mean(areas_this_image)) if areas_this_image else 0}")
                 else:
-                    st.error(f"❌ Écart: {detected_total_final} insectes détectés au total (attendu: {expected_total_final}, écart de {diff_grand_total}).")
+                    stat_col2.metric(f"Surface moyenne (Image {idx+1}, px)", "N/A")
+                if result_item["processed_data"]["filtered_props"] and result_item['num_detected'] > 0 :
+                    margin_for_preview = st.session_state.tuned_params_for_all_images["margin"]
+                    extracted_preview = extract_insects(result_item["cv_image_color"], result_item["processed_data"]["filtered_props"][:min(3, result_item['num_detected'])], margin_for_preview)
+                    if extracted_preview:
+                        st.write("Aperçu des 1ers insectes extraits:")
+                        preview_cols_ext = st.columns(len(extracted_preview))
+                        for i_ext, insect_ext_data in enumerate(extracted_preview):
+                            preview_cols_ext[i_ext].image(cv2.cvtColor(insect_ext_data["image"], cv2.COLOR_BGR2RGB), width=100)
+                st.markdown("---")
 
-                if st.button("Télécharger TOUS les insectes isolés (carrés, fond blanc)", key="download_all_zip"):
-                    # ... (Code de téléchargement ZIP, inchangé, mais s'assurer qu'il utilise les bons params)
-                    # Assurez-vous qu'il utilise st.session_state.tuned_params_for_all_images["margin"]
-                    temp_dir = tempfile.mkdtemp()
-                    zip_path = os.path.join(temp_dir, "insectes_isoles_batch.zip")
-                    with zipfile.ZipFile(zip_path, 'w') as zipf:
-                        for res_item_zip in st.session_state.all_images_results: # Utiliser les résultats stockés
-                            # Pas besoin de recharger l'image si cv_image_color est stockée
-                            image_orig_for_zip = res_item_zip["cv_image_color"]
-                            filename_base = os.path.splitext(res_item_zip["filename"])[0]
-                            props_for_extraction = res_item_zip["processed_data"]["filtered_props"]
-                            # Utiliser la marge des paramètres globaux finaux
-                            margin_for_extraction = st.session_state.tuned_params_for_all_images["margin"]
-                            
-                            extracted_insects_for_zip = extract_insects(image_orig_for_zip, props_for_extraction, margin_for_extraction)
-                            for insect_detail in extracted_insects_for_zip:
-                                insect_img_square = insect_detail["image"]
-                                insect_idx = insect_detail["index"]
-                                temp_img_filename = f"{filename_base}_insect_{insect_idx+1}.jpg"
-                                temp_img_path = os.path.join(temp_dir, temp_img_filename)
-                                cv2.imwrite(temp_img_path, insect_img_square)
-                                zipf.write(temp_img_path, os.path.join(filename_base, temp_img_filename))
-                    with open(zip_path, "rb") as f:
-                        bytes_data = f.read()
-                        b64 = base64.b64encode(bytes_data).decode()
-                        href = f'<a href="data:application/zip;base64,{b64}" download="insectes_isoles_batch.zip">Télécharger tous les insectes isolés (ZIP)</a>'
-                        st.markdown(href, unsafe_allow_html=True)
-            elif 'start_segmentation_button' not in st.session_state or not st.session_state.start_segmentation_button :
-                 st.info("Veuillez téléverser des images et cliquer sur 'Lancer la Segmentation...' pour commencer.")
+            st.header("Résultats Globaux Finaux de la Segmentation")
+            # ... (affichage des résultats globaux comme avant)
+            expected_total_final = st.session_state.get('expected_insects_grand_total_final',0)
+            detected_total_final = st.session_state.get('grand_total_detected_insects',0)
+            st.metric("Nombre TOTAL d'insectes attendus (toutes images)", expected_total_final)
+            st.metric("Nombre TOTAL d'insectes détectés (toutes images)", detected_total_final)
+            diff_grand_total = abs(detected_total_final - expected_total_final)
+            if diff_grand_total == 0 and expected_total_final > 0 :
+                st.success("✅ Succès! Nombre total d'insectes détectés correspond au nombre attendu.")
+            elif expected_total_final > 0 and diff_grand_total <= 0.1 * expected_total_final :
+                st.warning(f"⚠️ Attention: {detected_total_final} insectes détectés au total (attendu: {expected_total_final}, écart de {diff_grand_total}).")
+            else:
+                st.error(f"❌ Écart: {detected_total_final} insectes détectés au total (attendu: {expected_total_final}, écart de {diff_grand_total}).")
+
+            if st.button("Télécharger TOUS les insectes isolés (carrés, fond blanc)", key="download_all_zip_tab1"):
+                # ... (code de téléchargement zip comme avant)
+                temp_dir = tempfile.mkdtemp()
+                zip_path = os.path.join(temp_dir, "insectes_isoles_batch.zip")
+                with zipfile.ZipFile(zip_path, 'w') as zipf:
+                    for res_item_zip in st.session_state.all_images_results:
+                        image_orig_for_zip = res_item_zip["cv_image_color"]
+                        filename_base = os.path.splitext(res_item_zip["filename"])[0]
+                        props_for_extraction = res_item_zip["processed_data"]["filtered_props"]
+                        margin_for_extraction = st.session_state.tuned_params_for_all_images["margin"]
+                        extracted_insects_for_zip = extract_insects(image_orig_for_zip, props_for_extraction, margin_for_extraction)
+                        for insect_detail in extracted_insects_for_zip:
+                            insect_img_square = insect_detail["image"]
+                            insect_idx = insect_detail["index"]
+                            temp_img_filename = f"{filename_base}_insect_{insect_idx+1}.jpg"
+                            temp_img_path = os.path.join(temp_dir, temp_img_filename)
+                            cv2.imwrite(temp_img_path, insect_img_square)
+                            zipf.write(temp_img_path, os.path.join(filename_base, temp_img_filename))
+                with open(zip_path, "rb") as f:
+                    bytes_data = f.read()
+                    b64 = base64.b64encode(bytes_data).decode()
+                    href = f'<a href="data:application/zip;base64,{b64}" download="insectes_isoles_batch.zip">Télécharger tous les insectes isolés (ZIP)</a>'
+                    st.markdown(href, unsafe_allow_html=True)
+
+        elif not uploaded_files_main and st.session_state.get('segmentation_done', False):
+            # Si les fichiers ont été retirés après une segmentation, réinitialiser
+            st.session_state.segmentation_done = False
+            st.session_state.all_images_results = []
+            st.session_state.last_processed_file_names = None
+            st.info("Veuillez téléverser de nouvelles images pour la segmentation.")
+            st.rerun() # Optionnel, pour s'assurer que l'UI est propre
+
+        else: # Pas de fichiers téléversés et segmentation pas encore faite
+            st.info("Veuillez téléverser des images pour commencer la segmentation.")
 
 
     with tab2: # Onglet Identification
@@ -663,7 +584,7 @@ def main():
         elif class_names is None:
             st.error("Fichier de labels non disponible. Impossible de procéder à l'identification avec noms.")
         elif not st.session_state.get('segmentation_done', False) or not st.session_state.get('all_images_results'):
-            st.info("Veuillez d'abord effectuer la segmentation dans l'onglet 'Segmentation'.")
+            st.info("Veuillez d'abord effectuer la segmentation dans l'onglet 'Segmentation'. Les résultats apparaîtront ici.")
         else:
             st.info(f"Modèle d'identification (TFSMLayer) chargé. Classes détectées: {len(class_names) if class_names else 'N/A'}")
             st.write("Les insectes détectés dans la phase de segmentation vont être identifiés.")
@@ -671,11 +592,9 @@ def main():
             for i, result_item in enumerate(st.session_state.all_images_results):
                 st.markdown(f"---")
                 st.subheader(f"Identification pour l'image : {result_item['filename']}")
-                # Utiliser l'image CV déjà stockée si possible (result_item["cv_image_color"])
-                # ou la redécoder si besoin
                 if "cv_image_color" in result_item:
                     cv_image_orig_ident = result_item["cv_image_color"]
-                else: # Fallback si cv_image_color n'a pas été stockée
+                else:
                     nparr_ident = np.frombuffer(result_item["image_bytes"], np.uint8)
                     cv_image_orig_ident = cv2.imdecode(nparr_ident, cv2.IMREAD_COLOR)
 
@@ -703,7 +622,6 @@ def main():
                             st.markdown(f"**Confiance:** {confidence*100:.2f}%")
                     col_idx += 1
 
-
     with tab3: # Onglet Guide
         # ... (Code de l'onglet Guide, inchangé)
         st.header("Guide dʼoptimisation des paramètres")
@@ -714,18 +632,18 @@ def main():
         - Les labels possibles sont : {', '.join(class_names) if class_names else "Labels non chargés"}.
         """)
 
+
 if __name__ == "__main__":
-    # Initialisation de st.session_state pour les clés importantes
     keys_to_initialize = {
         'segmentation_done': False,
         'all_images_results': [],
         'grand_total_detected_insects': 0,
-        'expected_insects_grand_total_val': 3, # Valeur par défaut initiale pour le widget
-        'expected_insects_grand_total_final': 0, # Valeur utilisée pour le calcul final
-        'uploaded_files_names': [],
-        'sidebar_state': 'expanded',
+        'expected_insects_grand_total_val': 3,
+        'expected_insects_grand_total_final': 0,
+        'uploaded_files_names': [], # Utilisé précédemment, peut-être plus nécessaire avec la nouvelle logique
+        'last_processed_file_names': None, # Pour suivre les fichiers traités
         'preset_choice_val': "Par défaut",
-        'blur_kernel_val': 7, # Exemple, ajuster avec vos vraies valeurs par défaut
+        'blur_kernel_val': 7,
         'adapt_block_size_val': 35,
         'adapt_c_val': 5,
         'min_area_val': 100,
@@ -735,12 +653,13 @@ if __name__ == "__main__":
         'use_circularity_val': False,
         'min_circularity_val': 0.3,
         'auto_adjust_blur_val': False,
-        'start_segmentation_button': False, # Pour suivre l'état du bouton
-        'tuned_params_for_all_images': {}, # Pour stocker les paramètres finaux
-        'uploaded_files_for_sidebar': None # Pour le calcul de la valeur par défaut du nombre d'insectes
+        'tuned_params_for_all_images': {},
+        'uploaded_files_main_cache': None, # Pour la sidebar, stocke la liste des fichiers uploadés
+        'current_processing_params': {}, # Stocke les paramètres de la sidebar au moment du traitement
+        'current_preset_choice_for_logic': "Par défaut",
+        'current_should_auto_adjust_blur_for_logic': False
     }
     for key, default_value in keys_to_initialize.items():
         if key not in st.session_state:
             st.session_state[key] = default_value
-    
     main()
