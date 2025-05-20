@@ -326,7 +326,7 @@ def create_label_display_image(label_image_data, filtered_props):
 ECOLOGICAL_FUNCTIONS_MAP = {
     "Isopodes": "Décomposeurs",
     "Apidae": "Pollinisateurs", # Assurez-vous que "Apidae" est bien le label exact dans labels.txt
-    "Carabes": "Prédateurs",    # Assurez-vous que "Carabes" est exact (ou "Carabidae" etc.)
+    "Carabide": "Prédateurs",    # Assurez-vous que "Carabes" est exact (ou "Carabidae" etc.)
     "Mouches des semis": "Ravageur",
     "Arachnides": "Prédateurs",
     # Ajoutez d'autres mappings si nécessaire
