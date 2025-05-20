@@ -10,6 +10,7 @@ import tempfile
 import zipfile
 import base64
 import tensorflow as tf
+import matplotlib.pyplot as plt # Ajout pour le pie chart
 
 # --- Configuration du Modèle d'Identification (SavedModel) ---
 SAVED_MODEL_DIR_PATH = "model.savedmodel"
@@ -29,104 +30,99 @@ def make_square(image, fill_color=(255, 255, 255)):
 
 def process_image(image, params, expected_insects_for_image_info=0):
     blur_kernel = params["blur_kernel"]
-    adapt_block_size = params["adapt_block_size"]
+    adapt_block_size = params["adapt_block_size"] # Doit être impair
     adapt_c = params["adapt_c"]
-    min_area = params["min_area"] # C'est ce paramètre qu'on veut rendre plus influent
-    morph_kernel_size = params["morph_kernel"]
+    min_area = params["min_area"]
+    morph_kernel_size = params["morph_kernel"] # Doit être impair
     morph_iterations = params["morph_iterations"]
     auto_adjust_c_area_internally = params.get("auto_adjust_for_internal_tune", False)
     use_circularity = params.get("use_circularity", False)
     min_circularity = params.get("min_circularity", 0.3)
-    
-    # MODIFICATION : Option pour désactiver le filtre relatif pour le débogage
     apply_relative_filter = params.get("apply_relative_filter", True)
 
-
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    if blur_kernel > 1: # s'assurer que blur_kernel est impair
-        blur_kernel_odd = blur_kernel if blur_kernel % 2 != 0 else blur_kernel + 1
-        blurred = cv2.GaussianBlur(gray, (blur_kernel_odd, blur_kernel_odd), 0)
+    
+    # Flou gaussien
+    if blur_kernel > 0: # Noyau doit être > 0
+        blur_kernel_odd = blur_kernel if blur_kernel % 2 != 0 else blur_kernel + 1 # Assurer impair
+        blurred_img = cv2.GaussianBlur(gray, (blur_kernel_odd, blur_kernel_odd), 0)
     else:
-        blurred = gray
+        blurred_img = gray.copy() # Utiliser une copie pour éviter de modifier l'original 'gray'
         
     current_adapt_c = adapt_c
-    current_min_area = min_area # Utiliser la valeur passée
+    current_min_area = min_area
+
+    # S'assurer que adapt_block_size est impair et > 1
+    adapt_block_size_odd = adapt_block_size if adapt_block_size % 2 != 0 else adapt_block_size + 1
+    if adapt_block_size_odd <= 1: adapt_block_size_odd = 3
+    
+    # S'assurer que morph_kernel_size est impair
+    morph_kernel_odd = morph_kernel_size if morph_kernel_size % 2 != 0 else morph_kernel_size + 1
+    if morph_kernel_odd < 1: morph_kernel_odd = 1
+
 
     if auto_adjust_c_area_internally:
+        # ... (logique d'auto-ajustement, peut nécessiter une révision si la segmentation de base est modifiée)
+        # Pour l'instant, on se concentre sur la branche 'else' pour la segmentation manuelle
+        # Cette partie de l'auto-ajustement devrait idéalement refléter la chaîne de traitement standard.
+        # On va simplifier et supposer qu'elle utilise le même pipeline que 'else' pour la cohérence.
         adapt_c_values = [-5, 0, 2, 5, 8, 10, 15]
-        # MODIFICATION : S'assurer que min_area_values utilisé pour l'auto-ajustement est raisonnable
-        min_area_values_auto = [m for m in [20, 50, 100, 200, 500, 1000] if m <= current_min_area * 2] # Limiter pour ne pas aller trop loin
-        if not min_area_values_auto: min_area_values_auto = [current_min_area]
-
-        best_params_auto = {"adapt_c": current_adapt_c, "min_area": current_min_area}
+        best_params_auto = {"adapt_c": current_adapt_c}
         best_count_diff = float('inf')
-        best_filtered_props_auto = []
+
         for ac_auto in adapt_c_values:
-            # MODIFICATION: Utiliser min_area_values_auto ici si vous voulez un ajustement de min_area
-            # Pour l'instant, on se concentre sur l'ajustement de C, en gardant min_area fixe
-            # ou en utilisant une plage plus restreinte si on l'ajuste aussi.
-            # Si on veut ajuster min_area ici, il faut changer la boucle:
-            # for ma_auto in min_area_values_auto:
-            ma_auto = current_min_area # Garder min_area fixe pendant l'ajustement de C pour le moment
+            thresh_auto = cv2.adaptiveThreshold(blurred_img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, adapt_block_size_odd, ac_auto)
+            
+            # Appliquer des opérations morphologiques similaires à la branche 'else'
+            kernel_closing_auto = np.ones((morph_kernel_odd, morph_kernel_odd), np.uint8)
+            closed_auto = cv2.morphologyEx(thresh_auto, cv2.MORPH_CLOSE, kernel_closing_auto, iterations=morph_iterations)
+            
+            kernel_opening_auto = np.ones((morph_kernel_odd, morph_kernel_odd), np.uint8)
+            opened_auto = cv2.morphologyEx(closed_auto, cv2.MORPH_OPEN, kernel_opening_auto, iterations=1) # Moins d'itérations pour l'opening ici?
 
-            thresh_auto = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, adapt_block_size, ac_auto)
-            kernel_auto = np.ones((morph_kernel_size, morph_kernel_size), np.uint8)
-            opening_auto = cv2.morphologyEx(thresh_auto, cv2.MORPH_OPEN, kernel_auto, iterations=morph_iterations)
-            # MODIFICATION : Appliquer un closing plus fort pour connecter les parties et enlever le bruit
-            # kernel_closing_strong = np.ones((morph_kernel_size + 2, morph_kernel_size + 2), np.uint8) # Noyau un peu plus grand
-            # closing_strong_auto = cv2.morphologyEx(opening_auto, cv2.MORPH_CLOSE, kernel_closing_strong, iterations=1) # iterations à ajuster
-            # cleared_auto = clear_border(closing_strong_auto)
-            cleared_auto = clear_border(opening_auto) # Revenir à l'original pour l'instant
-
+            cleared_auto = clear_border(opened_auto)
             labels_auto = measure.label(cleared_auto)
             props_auto = measure.regionprops(labels_auto)
-            # Le filtrage par current_min_area se fait ici
-            current_filtered_props_auto = [prop for prop in props_auto if prop.area >= ma_auto] # Utiliser ma_auto
+            current_filtered_props_auto = [prop for prop in props_auto if prop.area >= current_min_area]
             count_diff = abs(len(current_filtered_props_auto) - expected_insects_for_image_info)
             if count_diff < best_count_diff:
                 best_count_diff = count_diff
                 best_params_auto["adapt_c"] = ac_auto
-                # best_params_auto["min_area"] = ma_auto # Si on ajuste min_area
-                best_filtered_props_auto = current_filtered_props_auto
                 if best_count_diff == 0: break
-            # if best_count_diff == 0: break # Sortir de la boucle externe si C est trouvé
         current_adapt_c = best_params_auto["adapt_c"]
-        # current_min_area = best_params_auto["min_area"] # Si on ajuste min_area
 
-        # Retraiter avec les meilleurs params trouvés pour C (et potentiellement min_area)
-        thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, adapt_block_size, current_adapt_c)
-        kernel = np.ones((morph_kernel_size, morph_kernel_size), np.uint8)
-        opening = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=morph_iterations)
-        # closing_strong = cv2.morphologyEx(opening, cv2.MORPH_CLOSE, kernel_closing_strong, iterations=1)
-        # cleared = clear_border(closing_strong)
-        cleared = clear_border(opening) # Revenir à l'original
-
+        # Retraiter avec le meilleur C trouvé
+        thresh = cv2.adaptiveThreshold(blurred_img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, adapt_block_size_odd, current_adapt_c)
+        kernel_closing = np.ones((morph_kernel_odd, morph_kernel_odd), np.uint8)
+        closing = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel_closing, iterations=morph_iterations)
+        kernel_opening = np.ones((morph_kernel_odd, morph_kernel_odd), np.uint8)
+        opening = cv2.morphologyEx(closing, cv2.MORPH_OPEN, kernel_opening, iterations=1) # Une seule itération d'opening peut être plus sûre
+        cleared = clear_border(opening)
         labels = measure.label(cleared)
-        # Utiliser les props déjà filtrées par l'auto-ajustement ou refiltrer avec le current_min_area final
-        props_before_final_filter = measure.regionprops(labels)
-        filtered_props = [prop for prop in props_before_final_filter if prop.area >= current_min_area]
+        props = measure.regionprops(labels)
+        filtered_props = [prop for prop in props if prop.area >= current_min_area]
 
-    else: # Traitement standard sans auto-ajustement interne de C/Area
-        thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, adapt_block_size, current_adapt_c)
+    else: # Traitement standard
+        thresh = cv2.adaptiveThreshold(blurred_img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, adapt_block_size_odd, current_adapt_c)
         
-        # Opérations morphologiques: l'ordre et la force sont importants
-        # 1. Dilater pour connecter les régions proches (peut être optionnel ou ajusté)
-        # connect_kernel = np.ones((3,3), np.uint8) # Petit noyau pour connecter
-        # dilated_thresh = cv2.dilate(thresh, connect_kernel, iterations=1) # Moins d'itérations
-
-        # 2. Closing pour remplir les petits trous DANS les objets
-        kernel_closing = np.ones((morph_kernel_size, morph_kernel_size), np.uint8) # Utiliser le paramètre de la sidebar
-        closing = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel_closing, iterations=morph_iterations) # Appliquer sur thresh ou dilated_thresh
-
-        # 3. Opening pour enlever les petits points de bruit et lisser les contours
-        kernel_opening = np.ones((morph_kernel_size, morph_kernel_size), np.uint8) # Utiliser le paramètre de la sidebar
-        opening = cv2.morphologyEx(closing, cv2.MORPH_OPEN, kernel_opening, iterations=morph_iterations) # Appliquer sur closing
+        # MODIFICATION : Renforcer le CLOSING pour connecter les morceaux d'insectes
+        # Un noyau plus grand et/ou plus d'itérations pour le closing.
+        # Le noyau utilisé est `morph_kernel_odd` avec `morph_iterations`.
+        # Vous pouvez expérimenter avec des itérations de closing plus élevées.
+        kernel_closing = np.ones((morph_kernel_odd, morph_kernel_odd), np.uint8)
+        closing = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel_closing, iterations=morph_iterations) # Utiliser les paramètres
         
+        # MODIFICATION : OPENING pour enlever le bruit.
+        # S'il est trop fort, il peut fragmenter. On utilise les paramètres, mais on pourrait
+        # envisager 1 itération fixe pour l'opening si `morph_iterations` est élevé pour le closing.
+        kernel_opening = np.ones((morph_kernel_odd, morph_kernel_odd), np.uint8)
+        # opening = cv2.morphologyEx(closing, cv2.MORPH_OPEN, kernel_opening, iterations=morph_iterations) # Si on veut le même nb d'itérations
+        opening = cv2.morphologyEx(closing, cv2.MORPH_OPEN, kernel_opening, iterations=max(1, morph_iterations // 2)) # Moins d'opening que de closing
+
         cleared = clear_border(opening)
         labels = measure.label(cleared)
         props = measure.regionprops(labels)
         
-        # Filtrage initial par min_area (CRUCIAL)
         pre_filter_props = [prop for prop in props if prop.area >= current_min_area]
 
         if use_circularity:
@@ -137,38 +133,28 @@ def process_image(image, params, expected_insects_for_image_info=0):
                     circularity = 4 * np.pi * prop.area / (perimeter * perimeter)
                     if circularity >= min_circularity:
                         filtered_props_circ.append(prop)
-            filtered_props = filtered_props_circ # Mettre à jour filtered_props
+            filtered_props = filtered_props_circ
         else:
-            filtered_props = pre_filter_props # Pas de filtrage par circularité
+            filtered_props = pre_filter_props
 
-
-    # --- Filtre de taille relative (Anti-Saleté) ---
-    # Ce filtre s'applique APRÈS le filtre min_area et circularité
     if apply_relative_filter and len(filtered_props) > 1:
         areas = [prop.area for prop in filtered_props]
         if areas: 
             avg_area = np.mean(areas)
-            # Heuristique : le filtre relatif n'a de sens que si la moyenne est substantielle
-            # Et si min_area n'est pas déjà très grand (auquel cas il a déjà fait le travail)
-            if avg_area > max(1.5 * current_min_area, 50): # La moyenne doit être un peu plus grande que min_area
-                relative_threshold_area = 0.1 * avg_area # Les objets doivent faire au moins 10% de la moyenne
-                
-                # Les objets doivent aussi être plus grands que min_area (redondant mais sûr)
-                # Et on ne veut pas que le seuil relatif soit plus petit que min_area
+            if avg_area > max(1.5 * current_min_area, 50):
+                relative_threshold_area = 0.1 * avg_area
                 final_relative_threshold = max(relative_threshold_area, current_min_area)
-
                 final_filtered_props_after_relative = []
                 for prop in filtered_props:
-                    if prop.area >= final_relative_threshold : # Utiliser le seuil combiné
+                    if prop.area >= final_relative_threshold :
                         final_filtered_props_after_relative.append(prop)
                 filtered_props = final_filtered_props_after_relative
-    # --- Fin du Filtre de Taille Relative ---
 
     final_params_used = params.copy()
     final_params_used['adapt_c'] = current_adapt_c
     final_params_used['min_area'] = current_min_area
     final_params_used['blur_kernel'] = blur_kernel
-    return {"blurred": blurred, "thresh": thresh, "opening": opening, "labels": labels,
+    return {"blurred": blurred_img, "thresh": thresh, "opening": opening, "labels": labels, # Retourner 'opening' (ou 'cleared')
             "filtered_props": filtered_props, "params_used": final_params_used}
 
 # ... (extract_insects, load_saved_model_and_labels, predict_insect_saved_model, create_label_display_image restent les mêmes)
@@ -335,16 +321,31 @@ def create_label_display_image(label_image_data, filtered_props):
                 label_display[coord[0], coord[1]] = color
     return label_display
 
+
+# MODIFICATION : Dictionnaire pour mapper les labels aux fonctions écologiques
+ECOLOGICAL_FUNCTIONS_MAP = {
+    "Isopodes": "Décomposeurs",
+    "Apidae": "Pollinisateurs", # Assurez-vous que "Apidae" est bien le label exact dans labels.txt
+    "Carabes": "Prédateurs",    # Assurez-vous que "Carabes" est exact (ou "Carabidae" etc.)
+    "Mouches des semis": "Ravageur",
+    "Arachnides": "Prédateurs",
+    # Ajoutez d'autres mappings si nécessaire
+    # "AutreLabel": "AutreFonction"
+}
+# Fonction par défaut si un label n'est pas dans le map
+DEFAULT_ECOLOGICAL_FUNCTION = "Non défini"
+
+
 def main():
     st.title("Détection, isolation et identification dʼinsectes")
-    st.write("Application pour la détection globale et l'identification d'insectes sur plusieurs images.")
+    # ... (le reste de main() jusqu'à la sidebar)
 
     model, class_names = load_saved_model_and_labels(SAVED_MODEL_DIR_PATH, LABELS_PATH)
 
     if model is None:
-        st.warning("Le modèle d'identification (SavedModel) n'a pas pu être chargé. La fonctionnalité d'identification sera désactivée.")
+        st.warning("Le modèle d'identification (SavedModel) n'a pas pu être chargé.")
     if class_names is None and model is not None:
-        st.warning("Le fichier de labels n'a pas pu être chargé. L'identification ne pourra pas afficher les noms de classe.")
+        st.warning("Le fichier de labels n'a pas pu être chargé.")
 
     with st.sidebar:
         st.header("Paramètres de détection Globaux")
@@ -361,14 +362,14 @@ def main():
 
         presets = {
             "Par défaut": {"blur_kernel": 7, "adapt_block_size": 35, "adapt_c": 5, "morph_kernel": 3, "morph_iterations": 2, "min_area": 100, "margin": 15, "apply_relative_filter": True},
-            "Grands insectes": {"blur_kernel": 7, "adapt_block_size": 35, "adapt_c": 8, "morph_kernel": 5, "morph_iterations": 2, "min_area": 500, "margin": 15, "apply_relative_filter": True}, # Augmenté min_area pour ce preset
-            "Petits insectes (bruité)": {"blur_kernel": 5, "adapt_block_size": 25, "adapt_c": 2, "morph_kernel": 5, "morph_iterations": 3, "min_area": 50, "margin": 10, "apply_relative_filter": False}, # Preset pour tester sans filtre relatif
+            "Grands insectes": {"blur_kernel": 7, "adapt_block_size": 35, "adapt_c": 8, "morph_kernel": 5, "morph_iterations": 2, "min_area": 500, "margin": 15, "apply_relative_filter": True},
+            "Petits insectes (bruité)": {"blur_kernel": 5, "adapt_block_size": 25, "adapt_c": 2, "morph_kernel": 5, "morph_iterations": 3, "min_area": 50, "margin": 10, "apply_relative_filter": False},
         }
         preset_choice_options = ["Personnalisé", "Auto-ajustement C/Aire Global"] + list(presets.keys())
         try:
             default_preset_index = preset_choice_options.index(st.session_state.get('preset_choice_val', "Par défaut"))
         except ValueError:
-            default_preset_index = preset_choice_options.index("Par défaut") if "Par défaut" in preset_choice_options else 0 # Fallback plus sûr
+            default_preset_index = preset_choice_options.index("Par défaut") if "Par défaut" in preset_choice_options else 0
         preset_choice = st.selectbox(
             "Configurations prédéfinies", 
             preset_choice_options, 
@@ -380,34 +381,31 @@ def main():
         base_params_config = presets["Par défaut"].copy()
         def get_initial_param_value(param_name, default_value_map, chosen_preset, global_config_map, session_key_suffix='_val'):
             session_key = f'{param_name}{session_key_suffix}'
-            # Si un preset est choisi (et n'est pas personnalisé ou auto), utiliser la valeur du preset
             if chosen_preset in default_value_map:
                 preset_value = default_value_map[chosen_preset].get(param_name)
                 if preset_value is not None:
-                    st.session_state[session_key] = preset_value # Mettre à jour session_state
+                    st.session_state[session_key] = preset_value
                     return preset_value
-            # Sinon (Personnalisé, Auto, ou param non dans preset), utiliser la valeur de session_state ou la valeur de base
             return st.session_state.get(session_key, global_config_map.get(param_name, 0))
 
-
         current_params_config = {}
-        current_params_config["blur_kernel"] = st.slider("Noyau de flou gaussien (impair)", 1, 21, get_initial_param_value("blur_kernel", presets, preset_choice, base_params_config), step=2, key="blur_glob_key_slider")
+        # MODIFICATION : Pas de 1 pour le flou gaussien
+        current_params_config["blur_kernel"] = st.slider("Noyau de flou gaussien (0 pour désactiver, sinon impair)", 0, 21, get_initial_param_value("blur_kernel", presets, preset_choice, base_params_config), step=1, key="blur_glob_key_slider")
         st.session_state.blur_kernel_val = current_params_config["blur_kernel"]
 
-        current_params_config["adapt_block_size"] = st.slider("Taille du bloc adaptatif (impair)", 3, 51, get_initial_param_value("adapt_block_size", presets, preset_choice, base_params_config), step=2, key="block_glob_key_slider")
+        current_params_config["adapt_block_size"] = st.slider("Taille du bloc adaptatif (impair, >1)", 3, 51, get_initial_param_value("adapt_block_size", presets, preset_choice, base_params_config), step=2, key="block_glob_key_slider")
         st.session_state.adapt_block_size_val = current_params_config["adapt_block_size"]
         
-        current_params_config["adapt_c"] = st.slider("Constante de seuillage C", -10, 30, get_initial_param_value("adapt_c", presets, preset_choice, base_params_config), key="c_glob_key_slider")
+        current_params_config["adapt_c"] = st.slider("Constante de seuillage C", -20, 20, get_initial_param_value("adapt_c", presets, preset_choice, base_params_config), step=1, key="c_glob_key_slider") # Plage ajustée
         st.session_state.adapt_c_val = current_params_config["adapt_c"]
 
-        # MODIFICATION : Augmenter la plage de min_area et le pas
         current_params_config["min_area"] = st.slider("Surface minimale Aire (pixels)", 10, 10000, get_initial_param_value("min_area", presets, preset_choice, base_params_config), step=10, key="area_glob_key_slider")
         st.session_state.min_area_val = current_params_config["min_area"]
 
-        current_params_config["morph_kernel"] = st.slider("Noyau morphologique (impair)", 1, 9, get_initial_param_value("morph_kernel", presets, preset_choice, base_params_config), step=2, key="morph_k_glob_key_slider")
+        current_params_config["morph_kernel"] = st.slider("Noyau morphologique (impair)", 1, 15, get_initial_param_value("morph_kernel", presets, preset_choice, base_params_config), step=2, key="morph_k_glob_key_slider") # Plage augmentée
         st.session_state.morph_kernel_val = current_params_config["morph_kernel"]
         
-        current_params_config["morph_iterations"] = st.slider("Itérations morphologiques", 1, 5, get_initial_param_value("morph_iterations", presets, preset_choice, base_params_config), key="morph_i_glob_key_slider")
+        current_params_config["morph_iterations"] = st.slider("Itérations morphologiques (Closing puis Opening)", 1, 5, get_initial_param_value("morph_iterations", presets, preset_choice, base_params_config), key="morph_i_glob_key_slider")
         st.session_state.morph_iterations_val = current_params_config["morph_iterations"]
 
         current_params_config["margin"] = st.slider("Marge autour des insectes", 0, 50, get_initial_param_value("margin", presets, preset_choice, base_params_config), key="margin_glob_key_slider")
@@ -420,26 +418,31 @@ def main():
             current_params_config["min_circularity"] = st.slider("Circularité minimale", 0.0, 1.0, st.session_state.get('min_circularity_val', 0.3), step=0.05, key="min_circularity_key_slider")
             st.session_state.min_circularity_val = current_params_config["min_circularity"]
         else:
-            # Garder la valeur même si non affiché, pour ne pas la perdre si on recoche
-            current_params_config["min_circularity"] = st.session_state.get('min_circularity_val', 0.3) 
+            current_params_config["min_circularity"] = st.session_state.get('min_circularity_val', 0.3)
 
         should_auto_adjust_blur_globally = st.checkbox("Auto-ajustement du Flou Global (sur 1ère image)", value=st.session_state.get('auto_adjust_blur_val', False), key="auto_blur_key_box")
         st.session_state.auto_adjust_blur_val = should_auto_adjust_blur_globally
         
-        # MODIFICATION : Option pour activer/désactiver le filtre relatif
         current_params_config["apply_relative_filter"] = st.checkbox("Appliquer filtre de taille relative (anti-saleté)", value=get_initial_param_value("apply_relative_filter", presets, preset_choice, base_params_config, session_key_suffix='_rel_filter_val'), key="relative_filter_key_box")
         st.session_state.apply_relative_filter_rel_filter_val = current_params_config["apply_relative_filter"]
 
         st.session_state.current_processing_params = current_params_config
         st.session_state.current_preset_choice_for_logic = preset_choice
         st.session_state.current_should_auto_adjust_blur_for_logic = should_auto_adjust_blur_globally
-
-    # ... (Onglets tab1, tab2, tab3 comme dans la version précédente, avec la logique de segmentation automatique)
-    # La logique dans tab1 utilisera st.session_state.current_processing_params
-
+    
+    # --- Onglets principaux ---
     tab1, tab2, tab3 = st.tabs(["Segmentation", "Identification", "Guide dʼutilisation"])
 
     with tab1:
+        # ... (Logique de l'onglet Segmentation comme dans la version précédente)
+        # Assurez-vous que `processed_data["opening"]` ou `processed_data["cleared"]`
+        # est bien l'image que vous voulez afficher comme étape intermédiaire de segmentation.
+        # Actuellement, `create_label_display_image` utilise `processed_data["labels"]`
+        # et `filtered_props` pour colorer les régions finales.
+        # Si vous voulez voir l'image binaire *avant* le label_display, il faut la stocker et l'afficher.
+        # Par exemple, dans la boucle d'affichage des résultats :
+        #   st.image(result_item["processed_data"]["opening"], caption="Résultat Morphologique (Opening)", use_column_width=True)
+        # Et s'assurer que "opening" (ou l'étape que vous voulez) est bien retournée par `process_image` et stockée.
         st.header("Phase 1 : Détection et Segmentation des insectes")
         uploaded_files_main = st.file_uploader(
             "Choisissez une ou plusieurs images pour la segmentation", 
@@ -451,31 +454,23 @@ def main():
 
         if uploaded_files_main:
             current_file_names = [f.name for f in uploaded_files_main]
-            
-            # Vérifier si les paramètres de la sidebar ont changé depuis le dernier traitement
-            # C'est une comparaison un peu basique, mais peut aider à redéclencher si besoin
             params_changed = False
             if 'last_used_processing_params' in st.session_state:
                 if st.session_state.last_used_processing_params != st.session_state.current_processing_params:
                     params_changed = True
-            else: # Premier lancement ou params non stockés
+            else:
                 params_changed = True
-
 
             if st.session_state.get('last_processed_file_names') != current_file_names or \
                not st.session_state.get('segmentation_done', False) or params_changed:
 
                 st.session_state.segmentation_done = False 
                 st.session_state.all_images_results = [] 
-                
                 params_to_use = st.session_state.current_processing_params
                 active_preset_choice = st.session_state.current_preset_choice_for_logic
                 active_should_auto_adjust_blur = st.session_state.current_should_auto_adjust_blur_for_logic
                 active_expected_total_insects = st.session_state.expected_insects_grand_total_val
-                
-                # Stocker les paramètres qui vont être utilisés pour ce run
                 st.session_state.last_used_processing_params = params_to_use.copy()
-
 
                 all_images_results_temp = []
                 grand_total_detected_insects = 0
@@ -485,6 +480,7 @@ def main():
                 tuned_params_for_all_images = params_to_use.copy()
 
                 first_image_obj = uploaded_files_main[0]
+                # ... (reste de la logique d'auto-ajustement et de traitement des images) ...
                 first_image_bytes = first_image_obj.getvalue()
                 first_nparr = np.frombuffer(first_image_bytes, np.uint8)
                 first_cv_image = cv2.imdecode(first_nparr, cv2.IMREAD_COLOR)
@@ -496,25 +492,33 @@ def main():
                 if should_auto_adjust_c_area_logic:
                     with st.spinner("Ajustement global C/Aire en cours..."):
                         params_for_c_area_tune = tuned_params_for_all_images.copy()
-                        # S'assurer que min_area de l'ajustement ne va pas plus bas que celui de la sidebar
                         params_for_c_area_tune["min_area"] = tuned_params_for_all_images["min_area"]
                         params_for_c_area_tune["auto_adjust_for_internal_tune"] = True
                         c_area_tune_data = process_image(first_cv_image, params_for_c_area_tune, expected_for_first_image_tuning)
                         tuned_params_for_all_images["adapt_c"] = c_area_tune_data["params_used"]["adapt_c"]
-                        # L'auto-ajustement de min_area est désactivé dans process_image pour l'instant
-                        # Si on le réactive, il faudrait le prendre ici :
-                        # tuned_params_for_all_images["min_area"] = c_area_tune_data["params_used"]["min_area"]
                     st.success(f"Global C/Aire déterminés: C={tuned_params_for_all_images['adapt_c']}, Aire Min (utilisée): {tuned_params_for_all_images['min_area']}")
 
 
                 if active_should_auto_adjust_blur:
                     with st.spinner("Ajustement global du Flou en cours..."):
-                        blur_kernel_options = [k for k in range(1, 22, 2)]
-                        best_blur_found_globally = tuned_params_for_all_images["blur_kernel"]
+                        blur_kernel_options = [k for k in range(1, 22, 2) if k > 0] # Noyau de flou > 0
+                        if tuned_params_for_all_images["blur_kernel"] == 0 and blur_kernel_options: # Si flou désactivé, commencer par le plus petit
+                            best_blur_found_globally = blur_kernel_options[0]
+                        else:
+                            best_blur_found_globally = tuned_params_for_all_images["blur_kernel"]
+                        
                         min_diff_for_global_blur = float('inf')
                         c_after_blur_tune = tuned_params_for_all_images["adapt_c"]
-                        area_after_blur_tune = tuned_params_for_all_images["min_area"] # Reste le min_area de la sidebar
-                        for trial_blur in blur_kernel_options:
+                        # area_after_blur_tune = tuned_params_for_all_images["min_area"]
+                        
+                        # Tester aussi sans flou si le flou actuel n'est pas 0
+                        if tuned_params_for_all_images["blur_kernel"] != 0:
+                            blur_kernel_options_with_zero = [0] + blur_kernel_options
+                        else:
+                            blur_kernel_options_with_zero = blur_kernel_options
+
+
+                        for trial_blur in blur_kernel_options_with_zero:
                             params_for_blur_trial = tuned_params_for_all_images.copy()
                             params_for_blur_trial["blur_kernel"] = trial_blur
                             params_for_blur_trial["auto_adjust_for_internal_tune"] = should_auto_adjust_c_area_logic
@@ -526,17 +530,14 @@ def main():
                                 best_blur_found_globally = trial_blur
                                 if should_auto_adjust_c_area_logic:
                                     c_after_blur_tune = trial_data["params_used"]["adapt_c"]
-                                    # area_after_blur_tune = trial_data["params_used"]["min_area"] # Si min_area est ajusté
-                            elif trial_diff == min_diff_for_global_blur and trial_blur < best_blur_found_globally:
+                            elif trial_diff == min_diff_for_global_blur and trial_blur < best_blur_found_globally: # Préférer un flou plus petit si égalité
                                 best_blur_found_globally = trial_blur
                                 if should_auto_adjust_c_area_logic:
                                     c_after_blur_tune = trial_data["params_used"]["adapt_c"]
-                                    # area_after_blur_tune = trial_data["params_used"]["min_area"]
                             if min_diff_for_global_blur == 0: break
                         tuned_params_for_all_images["blur_kernel"] = best_blur_found_globally
                         if should_auto_adjust_c_area_logic:
                             tuned_params_for_all_images["adapt_c"] = c_after_blur_tune
-                            # tuned_params_for_all_images["min_area"] = area_after_blur_tune # Si min_area est ajusté
                             st.success(f"Global Flou déterminé: {tuned_params_for_all_images['blur_kernel']}. Global C/Aire (après Flou): C={tuned_params_for_all_images['adapt_c']}, Aire Min (utilisée): {tuned_params_for_all_images['min_area']}")
                         else:
                             st.success(f"Global Flou déterminé: {tuned_params_for_all_images['blur_kernel']}.")
@@ -574,23 +575,34 @@ def main():
             st.header("Résultats de la Segmentation par Image")
             for idx, result_item in enumerate(st.session_state.all_images_results):
                 st.markdown(f"#### Image {idx + 1}: {result_item['filename']}")
-                col1, col2 = st.columns(2)
+                
+                # MODIFICATION : Afficher 3 images: Originale, Résultat Morpho, Labels colorés
+                col1, col2, col3 = st.columns(3) 
                 with col1:
                     st.image(cv2.cvtColor(result_item["cv_image_color"], cv2.COLOR_BGR2RGB), 
                              caption=f"Originale", 
                              use_column_width=True)
                 with col2:
+                    # Afficher l'image après les opérations morphologiques (ex: 'opening' ou 'cleared')
+                    # S'assurer que 'opening' est bien une image binaire 0-255
+                    morpho_result_img = result_item["processed_data"]["opening"] 
+                    st.image(morpho_result_img, clamp=True, channels="GRAY", # clamp pour s'assurer des valeurs 0-255 si besoin
+                             caption="Résultat Morphologique", 
+                             use_column_width=True)
+                with col3:
                     label_image_from_processing = result_item["processed_data"]["labels"]
                     filtered_props_for_display = result_item["processed_data"]["filtered_props"]
                     display_img_labels = create_label_display_image(label_image_from_processing, filtered_props_for_display)
                     st.image(display_img_labels, 
                              caption=f"Insectes Détectés: {result_item['num_detected']}", 
                              use_column_width=True)
+
+                # ... (Stats et aperçu des extraits comme avant) ...
                 stat_col1, stat_col2 = st.columns(2)
                 stat_col1.metric(f"Insectes détectés (Image {idx+1})", result_item['num_detected'])
                 if result_item["processed_data"]["filtered_props"]:
                     areas_this_image = [prop.area for prop in result_item["processed_data"]["filtered_props"]]
-                    stat_col2.metric(f"Surface moyenne (Image {idx+1}, px)", f"{int(np.mean(areas_this_image)) if areas_this_image else 'N/A'}") # Correction
+                    stat_col2.metric(f"Surface moyenne (Image {idx+1}, px)", f"{int(np.mean(areas_this_image)) if areas_this_image else 'N/A'}")
                 else:
                     stat_col2.metric(f"Surface moyenne (Image {idx+1}, px)", "N/A")
                 if result_item["processed_data"]["filtered_props"] and result_item['num_detected'] > 0 :
@@ -603,7 +615,9 @@ def main():
                             preview_cols_ext[i_ext].image(cv2.cvtColor(insect_ext_data["image"], cv2.COLOR_BGR2RGB), width=100)
                 st.markdown("---")
 
+
             st.header("Résultats Globaux Finaux de la Segmentation")
+            # ... (Affichage des résultats globaux et bouton de téléchargement) ...
             expected_total_final = st.session_state.get('expected_insects_grand_total_final',0)
             detected_total_final = st.session_state.get('grand_total_detected_insects',0)
             st.metric("Nombre TOTAL d'insectes attendus (toutes images)", expected_total_final)
@@ -639,32 +653,68 @@ def main():
                     href = f'<a href="data:application/zip;base64,{b64}" download="insectes_isoles_batch.zip">Télécharger tous les insectes isolés (ZIP)</a>'
                     st.markdown(href, unsafe_allow_html=True)
 
+
         elif not uploaded_files_main and st.session_state.get('segmentation_done', False):
             st.session_state.segmentation_done = False
             st.session_state.all_images_results = []
             st.session_state.last_processed_file_names = None
             st.info("Veuillez téléverser de nouvelles images pour la segmentation.")
-            # st.rerun() # Pas de rerun ici pour éviter boucle si l'utilisateur vient de retirer les fichiers
 
-        elif not uploaded_files_main : # Pas de fichiers et pas de segmentation précédente
+        elif not uploaded_files_main :
             st.info("Veuillez téléverser des images pour commencer la segmentation.")
 
 
     with tab2: # Onglet Identification
         st.header("Phase 2 : Identification des insectes")
-        if model is None:
-            st.error("Modèle d'identification non disponible. Impossible de procéder.")
-        elif class_names is None:
-            st.error("Fichier de labels non disponible. Impossible de procéder à l'identification avec noms.")
+        if model is None or class_names is None: # Vérification simplifiée
+            st.error("Modèle d'identification ou labels non disponibles. Impossible de procéder.")
         elif not st.session_state.get('segmentation_done', False) or not st.session_state.get('all_images_results'):
-            st.info("Veuillez d'abord effectuer la segmentation dans l'onglet 'Segmentation'. Les résultats apparaîtront ici.")
+            st.info("Veuillez d'abord effectuer la segmentation dans l'onglet 'Segmentation'.")
         else:
-            st.info(f"Modèle d'identification (TFSMLayer) chargé. Classes détectées: {len(class_names) if class_names else 'N/A'}")
-            st.write("Les insectes détectés dans la phase de segmentation vont être identifiés.")
+            st.info(f"Modèle d'identification chargé. Classes: {len(class_names)}")
+            
+            all_identified_labels = []
+            for result_item in st.session_state.all_images_results:
+                # ... (Logique d'extraction et prédiction pour chaque image) ...
+                if "cv_image_color" in result_item:
+                    cv_image_orig_ident = result_item["cv_image_color"]
+                else:
+                    nparr_ident = np.frombuffer(result_item["image_bytes"], np.uint8)
+                    cv_image_orig_ident = cv2.imdecode(nparr_ident, cv2.IMREAD_COLOR)
+                props_for_extraction = result_item["processed_data"]["filtered_props"]
+                margin_for_extraction = result_item.get("params_used_for_extraction",{}).get("margin", st.session_state.get("tuned_params_for_all_images",{}).get("margin",15) )
+                extracted_insects_for_id = extract_insects(cv_image_orig_ident, props_for_extraction, margin_for_extraction)
 
+                for insect_data in extracted_insects_for_id:
+                    label, confidence, _ = predict_insect_saved_model(insect_data["image"], model, class_names, MODEL_INPUT_SIZE)
+                    if "Erreur" not in label:
+                        all_identified_labels.append(label)
+            
+            # Compter les fonctions écologiques
+            ecological_counts = {}
+            for identified_label in all_identified_labels:
+                eco_function = ECOLOGICAL_FUNCTIONS_MAP.get(identified_label, DEFAULT_ECOLOGICAL_FUNCTION)
+                ecological_counts[eco_function] = ecological_counts.get(eco_function, 0) + 1
+            
+            if ecological_counts:
+                st.subheader("Répartition des Fonctions Écologiques")
+                
+                # Créer le pie chart avec Matplotlib
+                labels_pie = list(ecological_counts.keys())
+                sizes_pie = list(ecological_counts.values())
+                
+                fig1, ax1 = plt.subplots()
+                ax1.pie(sizes_pie, labels=labels_pie, autopct='%1.1f%%', startangle=90)
+                ax1.axis('equal') # Assure que le pie est un cercle.
+                st.pyplot(fig1)
+            else:
+                st.write("Aucun insecte n'a pu être identifié pour générer le graphique des fonctions écologiques.")
+
+            # Affichage détaillé des insectes identifiés par image (comme avant)
             for i, result_item in enumerate(st.session_state.all_images_results):
                 st.markdown(f"---")
-                st.subheader(f"Identification pour l'image : {result_item['filename']}")
+                st.subheader(f"Détail identification pour : {result_item['filename']}")
+                # ... (répéter la logique d'affichage des insectes identifiés par image) ...
                 if "cv_image_color" in result_item:
                     cv_image_orig_ident = result_item["cv_image_color"]
                 else:
@@ -672,22 +722,12 @@ def main():
                     cv_image_orig_ident = cv2.imdecode(nparr_ident, cv2.IMREAD_COLOR)
 
                 props_for_extraction = result_item["processed_data"]["filtered_props"]
-                # S'assurer que params_used_for_extraction existe et a une clé margin
-                if "params_used_for_extraction" in result_item and "margin" in result_item["params_used_for_extraction"]:
-                    margin_for_extraction = result_item["params_used_for_extraction"]["margin"]
-                elif 'tuned_params_for_all_images' in st.session_state and "margin" in st.session_state.tuned_params_for_all_images:
-                     margin_for_extraction = st.session_state.tuned_params_for_all_images["margin"]
-                else: # Fallback
-                    margin_for_extraction = 15 # Valeur par défaut si non trouvée
-                    st.warning("Marge par défaut utilisée pour l'extraction d'identification.")
-
-
+                margin_for_extraction = result_item.get("params_used_for_extraction",{}).get("margin", st.session_state.get("tuned_params_for_all_images",{}).get("margin",15) )
                 extracted_insects_for_id = extract_insects(cv_image_orig_ident, props_for_extraction, margin_for_extraction)
 
                 if not extracted_insects_for_id:
                     st.write("Aucun insecte à identifier pour cette image.")
                     continue
-
                 num_cols = 3
                 cols = st.columns(num_cols)
                 col_idx = 0
@@ -701,54 +741,44 @@ def main():
                             st.error(f"{label} (Confiance: {confidence*100:.2f}%)")
                         else:
                             st.markdown(f"**Label:** {label}")
+                            st.markdown(f"**Fonction:** {ECOLOGICAL_FUNCTIONS_MAP.get(label, DEFAULT_ECOLOGICAL_FUNCTION)}")
                             st.markdown(f"**Confiance:** {confidence*100:.2f}%")
                     col_idx += 1
 
+
     with tab3: # Onglet Guide
+        # ... (Guide comme avant, mais ajouter une note sur le pie chart et les fonctions écologiques)
         st.header("Guide dʼoptimisation des paramètres")
         st.subheader("Identification des Insectes")
         st.write(f"""
-        Après la segmentation, l'onglet "Identification" utilise un modèle TensorFlow SavedModel (chargé via TFSMLayer pour Keras 3) pour classifier chaque insecte isolé.
+        Après la segmentation, l'onglet "Identification" utilise un modèle TensorFlow SavedModel pour classifier chaque insecte isolé.
         - Le modèle attend des images carrées de taille {MODEL_INPUT_SIZE[0]}x{MODEL_INPUT_SIZE[1]} pixels.
         - Les labels possibles sont : {', '.join(class_names) if class_names else "Labels non chargés"}.
+        - Un graphique circulaire (camembert) montre la répartition des fonctions écologiques des insectes identifiés sur l'ensemble des images.
         """)
         st.subheader("Paramètres de Segmentation")
         st.write("""
-        - **Surface minimale Aire (pixels)**: C'est le paramètre le plus direct pour filtrer les petits objets. Augmentez cette valeur pour ignorer les détections plus petites. La plage va maintenant jusqu'à 10000 pixels.
-        - **Noyau morphologique & Itérations morphologiques**: Ces paramètres contrôlent les opérations d'ouverture (enlève le bruit, lisse les contours) et de fermeture (remplit les trous dans les objets). Des noyaux plus grands ou plus d'itérations rendent ces opérations plus agressives. Testez différentes combinaisons.
-        - **Flou gaussien**: Aide à réduire le bruit avant le seuillage. Un noyau plus grand donne un flou plus important.
-        - **Constante de seuillage C**: Ajuste la sensibilité du seuillage adaptatif.
-        - **Appliquer filtre de taille relative**: Si coché, un filtre supplémentaire est appliqué APRÈS le filtre `Surface minimale Aire`. Il enlève les objets qui sont significativement plus petits (moins de 10%) que la taille moyenne des objets déjà détectés sur l'image. Décochez cette option si vous voulez que `Surface minimale Aire` soit le seul critère de taille.
-        - **Auto-ajustement ...**: Ces options tentent d'optimiser C, l'aire (désactivé pour l'instant pour `min_area` dans l'auto-ajustement) ou le flou sur la première image. Leur efficacité dépend de la représentativité de la première image.
+        - **Noyau de flou gaussien**: Le pas est maintenant de 1 pour plus de précision. 0 désactive le flou. Un flou léger peut aider à réduire le bruit.
+        - **Opérations morphologiques**: L'ordre est THRESH -> CLOSING -> OPENING.
+            - *Closing* (avec `Noyau morphologique` et `Itérations morphologiques`) est appliqué pour remplir les trous et connecter les parties proches des objets.
+            - *Opening* (avec `Noyau morphologique` et la moitié des itérations du closing, au moins 1) est appliqué ensuite pour enlever le bruit fin et lisser les contours. Si les insectes sont trop fragmentés, essayez d'augmenter les itérations de *Closing* ou de réduire légèrement celles de *Opening* (indirectement en augmentant celles du closing).
+        - **Surface minimale Aire**: Principal filtre de taille. Augmentez pour ignorer les petits objets.
         """)
 
 
 if __name__ == "__main__":
+    # ... (Initialisation de st.session_state comme avant, s'assurer que les nouvelles clés sont là)
     keys_to_initialize = {
-        'segmentation_done': False,
-        'all_images_results': [],
-        'grand_total_detected_insects': 0,
-        'expected_insects_grand_total_val': 3,
-        'expected_insects_grand_total_final': 0,
-        'last_processed_file_names': None,
-        'preset_choice_val': "Par défaut",
-        'blur_kernel_val': 7,
-        'adapt_block_size_val': 35,
-        'adapt_c_val': 5,
-        'min_area_val': 100,
-        'morph_kernel_val': 3,
-        'morph_iterations_val': 2,
-        'margin_val': 15,
-        'use_circularity_val': False,
-        'min_circularity_val': 0.3,
-        'auto_adjust_blur_val': False,
-        'apply_relative_filter_rel_filter_val': True, # Valeur par défaut pour la nouvelle option
-        'tuned_params_for_all_images': {},
-        'uploaded_files_main_cache': None,
-        'current_processing_params': {},
-        'current_preset_choice_for_logic': "Par défaut",
-        'current_should_auto_adjust_blur_for_logic': False,
-        'last_used_processing_params': None # Pour détecter les changements de paramètres
+        'segmentation_done': False, 'all_images_results': [], 'grand_total_detected_insects': 0,
+        'expected_insects_grand_total_val': 3, 'expected_insects_grand_total_final': 0,
+        'last_processed_file_names': None, 'preset_choice_val': "Par défaut",
+        'blur_kernel_val': 7, 'adapt_block_size_val': 35, 'adapt_c_val': 5,
+        'min_area_val': 100, 'morph_kernel_val': 3, 'morph_iterations_val': 2,
+        'margin_val': 15, 'use_circularity_val': False, 'min_circularity_val': 0.3,
+        'auto_adjust_blur_val': False, 'apply_relative_filter_rel_filter_val': True,
+        'tuned_params_for_all_images': {}, 'uploaded_files_main_cache': None,
+        'current_processing_params': {}, 'current_preset_choice_for_logic': "Par défaut",
+        'current_should_auto_adjust_blur_for_logic': False, 'last_used_processing_params': None
     }
     for key, default_value in keys_to_initialize.items():
         if key not in st.session_state:
