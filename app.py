@@ -327,7 +327,7 @@ ECOLOGICAL_FUNCTIONS_MAP = {
     "Isopodes": "Décomposeurs",
     "Apidae": "Pollinisateurs", # Assurez-vous que "Apidae" est bien le label exact dans labels.txt
     "Carabide": "Prédateurs",    # Assurez-vous que "Carabes" est exact (ou "Carabidae" etc.)
-    "Mouche des semis": "Ravageur",
+    "Mouches des semis": "Ravageur",
     "Arachnides": "Prédateurs",
     # Ajoutez d'autres mappings si nécessaire
     # "AutreLabel": "AutreFonction"
