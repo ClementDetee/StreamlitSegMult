@@ -322,19 +322,14 @@ def create_label_display_image(label_image_data, filtered_props):
     return label_display
 
 
-# MODIFICATION : Dictionnaire pour mapper les labels aux fonctions écologiques
 ECOLOGICAL_FUNCTIONS_MAP = {
+    "Apidae": "Pollinisateurs",
     "Isopodes": "Décomposeurs",
-    "Apidae": "Pollinisateurs", # Assurez-vous que "Apidae" est bien le label exact dans labels.txt
-    "Carabide": "Prédateurs",    # Assurez-vous que "Carabes" est exact (ou "Carabidae" etc.)
-    "Mouches des semis": "Ravageur",
+    "Carabide": "Prédateurs",      # Note: "Carabide" et non "Carabes". Si votre modèle prédit "Carabidae", il faudra ajuster.
     "Arachnides": "Prédateurs",
-    # Ajoutez d'autres mappings si nécessaire
-    # "AutreLabel": "AutreFonction"
+    "Mouches des semis": "Ravageur"
 }
-# Fonction par défaut si un label n'est pas dans le map
-DEFAULT_ECOLOGICAL_FUNCTION = "Non défini"
-
+DEFAULT_ECOLOGICAL_FUNCTION = "Non défini" # Pour tout autre label non listé ci-dessus
 
 def main():
     st.title("Détection, isolation et identification dʼinsectes")
