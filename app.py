@@ -27,6 +27,147 @@ def make_square(image, fill_color=(255, 255, 255)):
     right = max_side - width - left
     square_image = cv2.copyMakeBorder(image, top, bottom, left, right, cv2.BORDER_CONSTANT, value=fill_color)
     return square_image
+import math # Pour math.log (ln)
+
+# ... (votre code existant) ...
+
+# MODIFICATION : Fonction pour calculer l'indice de Shannon
+def calculate_shannon_index(counts_dict):
+    """
+    Calcule l'indice de diversité de Shannon à partir d'un dictionnaire de comptes.
+    counts_dict: {'categorie1': count1, 'categorie2': count2, ...}
+    """
+    if not counts_dict or sum(counts_dict.values()) == 0:
+        return 0.0
+
+    total_individuals = sum(counts_dict.values())
+    shannon_index = 0.0
+
+    for category in counts_dict:
+        count = counts_dict[category]
+        if count > 0: # Important car ln(0) est indéfini
+            proportion = count / total_individuals
+            shannon_index -= proportion * math.log(proportion) # math.log est ln par défaut
+
+    return shannon_index
+
+# ... (dans la fonction main(), onglet "Identification") ...
+    with tab2: # Onglet Identification
+        st.header("Phase 2 : Identification des insectes")
+        # ... (logique de vérification du modèle, des labels, de la segmentation) ...
+        if model and class_names and st.session_state.get('segmentation_done') and st.session_state.get('all_images_results'):
+            st.info(f"Modèle d'identification chargé. Classes: {len(class_names)}")
+            
+            all_identified_labels = []
+            for result_item in st.session_state.all_images_results:
+                # ... (votre boucle existante pour extraire et prédire les insectes) ...
+                if "cv_image_color" in result_item:
+                    cv_image_orig_ident = result_item["cv_image_color"]
+                else:
+                    nparr_ident = np.frombuffer(result_item["image_bytes"], np.uint8)
+                    cv_image_orig_ident = cv2.imdecode(nparr_ident, cv2.IMREAD_COLOR)
+                props_for_extraction = result_item["processed_data"]["filtered_props"]
+                margin_for_extraction = result_item.get("params_used_for_extraction",{}).get("margin", st.session_state.get("tuned_params_for_all_images",{}).get("margin",15) )
+                extracted_insects_for_id = extract_insects(cv_image_orig_ident, props_for_extraction, margin_for_extraction)
+
+                for insect_data in extracted_insects_for_id:
+                    label, confidence, _ = predict_insect_saved_model(insect_data["image"], model, class_names, MODEL_INPUT_SIZE)
+                    if "Erreur" not in label:
+                        all_identified_labels.append(label)
+            
+            # Pour débogage des labels non mappés
+            labels_non_mappes = set()
+            for identified_label in all_identified_labels:
+                if identified_label not in ECOLOGICAL_FUNCTIONS_MAP:
+                    labels_non_mappes.add(identified_label)
+            if labels_non_mappes:
+                st.warning(f"Labels prédits non trouvés dans ECOLOGICAL_FUNCTIONS_MAP : {labels_non_mappes}. Ils seront classés comme '{DEFAULT_ECOLOGICAL_FUNCTION}'.")
+
+            # Compter les fonctions écologiques
+            ecological_counts = {}
+            for identified_label in all_identified_labels:
+                eco_function = ECOLOGICAL_FUNCTIONS_MAP.get(identified_label, DEFAULT_ECOLOGICAL_FUNCTION)
+                ecological_counts[eco_function] = ecological_counts.get(eco_function, 0) + 1
+            
+            if ecological_counts:
+                st.subheader("Répartition des Fonctions Écologiques")
+                
+                labels_pie = list(ecological_counts.keys())
+                sizes_pie = list(ecological_counts.values())
+                
+                # Couleurs pour le pie chart (optionnel, pour un meilleur look)
+                # Vous pouvez définir plus de couleurs si vous avez plus de catégories
+                colors_map = {
+                    "Décomposeurs": "#8B4513", # Marron
+                    "Pollinisateurs": "#FFD700", # Or/Jaune
+                    "Prédateurs": "#DC143C",    # Rouge Crimson
+                    "Ravageur": "#FF8C00",      # Orange Foncé
+                    "Non défini": "#D3D3D3"     # Gris clair
+                }
+                pie_colors = [colors_map.get(label, "#CCCCCC") for label in labels_pie] # Gris par défaut
+
+                fig1, ax1 = plt.subplots()
+                ax1.pie(sizes_pie, labels=labels_pie, autopct='%1.1f%%', startangle=90, colors=pie_colors)
+                ax1.axis('equal')
+                st.pyplot(fig1)
+
+                # MODIFICATION : Calcul et affichage de l'indice de Shannon
+                shannon_functional_index = calculate_shannon_index(ecological_counts)
+                st.subheader("Indice de Shannon Fonctionnel (H')")
+                st.metric(label="H'", value=f"{shannon_functional_index:.3f}")
+                if shannon_functional_index == 0 and sum(ecological_counts.values()) > 0 :
+                     st.caption("Un indice de 0 signifie qu'une seule fonction écologique est présente.")
+                elif shannon_functional_index > 0:
+                     # Interprétation (très simplifiée)
+                     max_shannon = math.log(len(ecological_counts)) if len(ecological_counts) > 0 else 0
+                     st.caption(f"Max H' possible pour {len(ecological_counts)} fonctions: {max_shannon:.3f}. "
+                                f"Plus H' est élevé, plus la diversité fonctionnelle est grande.")
+
+
+            else:
+                st.write("Aucun insecte n'a pu être identifié pour générer le graphique ou l'indice de Shannon.")
+
+            # Affichage détaillé des insectes identifiés par image (comme avant)
+            for i, result_item in enumerate(st.session_state.all_images_results):
+                # ... (votre code existant pour afficher les insectes par image)
+                st.markdown(f"---")
+                st.subheader(f"Détail identification pour : {result_item['filename']}")
+                if "cv_image_color" in result_item:
+                    cv_image_orig_ident = result_item["cv_image_color"]
+                else:
+                    nparr_ident = np.frombuffer(result_item["image_bytes"], np.uint8)
+                    cv_image_orig_ident = cv2.imdecode(nparr_ident, cv2.IMREAD_COLOR)
+
+                props_for_extraction = result_item["processed_data"]["filtered_props"]
+                margin_for_extraction = result_item.get("params_used_for_extraction",{}).get("margin", st.session_state.get("tuned_params_for_all_images",{}).get("margin",15) )
+                extracted_insects_for_id = extract_insects(cv_image_orig_ident, props_for_extraction, margin_for_extraction)
+
+                if not extracted_insects_for_id:
+                    st.write("Aucun insecte à identifier pour cette image.")
+                    continue
+                num_cols = 3
+                cols = st.columns(num_cols)
+                col_idx = 0
+                for insect_data in extracted_insects_for_id:
+                    insect_img_square_cv2 = insect_data["image"]
+                    label, confidence, all_scores = predict_insect_saved_model(insect_img_square_cv2, model, class_names, MODEL_INPUT_SIZE)
+                    current_col = cols[col_idx % num_cols]
+                    with current_col:
+                        st.image(cv2.cvtColor(insect_img_square_cv2, cv2.COLOR_BGR2RGB), caption=f"Insecte #{insect_data['index'] + 1}", width=150)
+                        if "Erreur" in label:
+                            st.error(f"{label} (Confiance: {confidence*100:.2f}%)")
+                        else:
+                            st.markdown(f"**Label:** {label}")
+                            st.markdown(f"**Fonction:** {ECOLOGICAL_FUNCTIONS_MAP.get(label, DEFAULT_ECOLOGICAL_FUNCTION)}") # Afficher la fonction
+                            st.markdown(f"**Confiance:** {confidence*100:.2f}%")
+                    col_idx += 1
+        else: # Cas où le modèle, les labels, ou la segmentation ne sont pas prêts
+            if not model or not class_names:
+                 st.error("Modèle d'identification ou labels non disponibles.")
+            elif not st.session_state.get('segmentation_done') or not st.session_state.get('all_images_results'):
+                 st.info("Veuillez d'abord effectuer la segmentation dans l'onglet 'Segmentation'.")
+
+
 
 def process_image(image, params, expected_insects_for_image_info=0):
     blur_kernel = params["blur_kernel"]
